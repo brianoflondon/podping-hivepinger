@@ -1,0 +1,11 @@
+services:
+  podping-hivepinger:
+    build: .
+    ports:
+      - "1820:1820"
+    volumes:
+      # persist the SQLite queue database on the host
+      - ./data:/data
+    environment:
+      - PYTHONUNBUFFERED=1
+    restart: unless-stopped

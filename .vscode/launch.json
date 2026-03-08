@@ -18,7 +18,24 @@
             ],
             "env": {
                 "PYTHONPATH": "${workspaceFolder}/src"
-            },
+            }
         },
+        {
+            "name": "FastAPI (CLI serve)",
+            "type": "debugpy",
+            "request": "launch",
+            "python": "${workspaceFolder}/.venv/bin/python",
+            "program": "${workspaceFolder}/src/app/api.py",
+            "args": [
+                "--host",
+                "0.0.0.0",
+                "--port",
+                "1820"
+            ],
+            "env": {
+                "PYTHONPATH": "${workspaceFolder}/src"
+            },
+            "console": "integratedTerminal"
+        }
     ]
 }

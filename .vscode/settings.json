@@ -11,5 +11,8 @@
         "statusBar.debuggingForeground": "#F6FAFD",
         "statusBar.noFolderBackground": "#0F3046",
         "statusBar.noFolderForeground": "#F6FAFD"
-    }
+    },
+    "cSpell.words": [
+        "hivepinger"
+    ]
 }

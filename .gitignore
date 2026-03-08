@@ -218,5 +218,10 @@ dist/
 wheels/
 *.egg-info
 
+*.env
+
 # Virtual environments
 .venv
+data/podping_queue.db
+data/podping_queue.db-shm
+data/podping_queue.db-wal
