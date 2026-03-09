@@ -62,6 +62,6 @@ jobs:
       - name: List installed packages
         run: uv pip list
 
-      # finally, run the tests
+      # finally, run the tests inside the UV-managed virtualenv
       - name: Run tests
-        run: pytest
+        run: uv run pytest
