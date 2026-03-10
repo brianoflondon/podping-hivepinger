@@ -24,7 +24,7 @@ src/
   app/
     __init__.py        # version detection via single-source
     api.py             # FastAPI app, Typer CLI, background loop
-    queue.py           # PodpingQueue — SQLite-backed queue with dedup
+    podping_queue.py    # PodpingQueue — SQLite-backed queue with dedup
   models/
     podping.py         # Mediums/Reasons enums
 tests/
@@ -42,14 +42,14 @@ pyproject.toml         # Dependencies and project metadata
 ### Local development
 
 ```bash
-# install dependencies
+# install dependencies (creates/upgrades .venv)
 uv sync
 
 # run via the Typer CLI (starts FastAPI + background loop)
-python src/app/api.py --host 0.0.0.0 --port 1820
+uv run python src/app/api.py --host 0.0.0.0 --port 1820
 
 # or run FastAPI alone with uvicorn (no background loop)
-PYTHONPATH=src uvicorn app.api:app --reload --host 0.0.0.0 --port 1820
+uv run uvicorn app.api:app --reload --host 0.0.0.0 --port 1820
 ```
 
 ### VS Code debugging
@@ -76,10 +76,19 @@ The SQLite database is stored at `data/podping_queue.db` and mapped to the host 
 
 ### Testing
 
+The project uses `uv` to manage a reproducible virtual environment; once the
+dependencies are synced you can run all commands through it instead of
+activating the venv manually.
+
 ```bash
-uv sync
-.venv/bin/pytest tests/ -v
+uv sync          # install/update dependencies
+uv run pytest tests/ -v   # execute the test suite inside the UV env
+# or, for a single file:
+uv run pytest tests/test_queue.py::test_enqueue_and_dequeue -q
 ```
+
+(You can still use `.venv/bin/pytest` directly if you prefer, but `uv run ...`
+is a convenient shortcut.)
 
 ### Example request
 
