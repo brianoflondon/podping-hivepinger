@@ -37,6 +37,7 @@ REASON_INTERVALS: dict[str, float] = {
     Reason.NEW_IRI.value: 60,
 }
 
+
 def create_lifespan(db_path: str = DEFAULT_DB_PATH):
     """Factory function to create lifespan with queue init/teardown"""
 
@@ -224,8 +225,9 @@ async def _serve(
         id=startup_op_id,
         nobroadcast=no_broadcast,
     )
+    rpc_ulr = hive_client.rpc.url if hive_client and hive_client.rpc else "N/A"
     logging.info(
-        f"Sent startup podping with uuid={uuid_str}, trx_id={startup_trx.get('trx_id', 'N/A')} {no_broadcast=}"
+        f"Sent startup podping with uuid={uuid_str}, trx_id={startup_trx.get('trx_id', 'N/A')} {rpc_ulr=} {no_broadcast=}"
     )
 
     async def background_loop():
@@ -239,10 +241,15 @@ async def _serve(
         # wait for queue initialization from lifespan
         while not hasattr(app.state, "queue"):
             await asyncio.sleep(0.1)
-        queue: PodpingQueue = app.state.queue
+        queue: PodpingQueue = app.state.queue  # type: ignore
 
-        # track last time each reason was processed
-        last_run: dict[str, float] = {}
+        # the previous implementation recorded a "last_run" timestamp and
+        # sent a batch as soon as the service started; that meant the very
+        # first URL was dispatched immediately and no buffering occurred.  the
+        # new approach delegates timing to the queue itself (via
+        # :meth:`PodpingQueue.ready_to_send`), which examines the age of the
+        # oldest pending entry and only returns ``True`` once it has been in
+        # the queue for the configured interval.
 
         # helper to build/refresh hive client
         last_client_creation = time()
@@ -250,6 +257,9 @@ async def _serve(
         def renew_client():
             nonlocal hive_client, last_client_creation
             hive_client = get_hive_client(keys=[hive_posting_key], nobroadcast=no_broadcast)
+            logging.info(
+                f"Hive client renewed: {hive_client.rpc.url if hive_client and hive_client.rpc else 'N/A'}"
+            )
             last_client_creation = time()
 
         while True:
@@ -262,8 +272,11 @@ async def _serve(
             try:
                 # process each reason according to its configured interval
                 for reason_str, interval in REASON_INTERVALS.items():
-                    prev = last_run.get(reason_str, 0)
-                    if now - prev < interval:
+                    # only dequeue a batch when the oldest pending URL for that
+                    # reason has been queued long enough; this allows us to
+                    # accumulate additional URLs that arrive shortly after the
+                    # first one.
+                    if not await queue.ready_to_send(reason_str, interval):
                         continue
 
                     batch = await queue.dequeue_batch(reason=reason_str)
@@ -271,7 +284,7 @@ async def _serve(
                         continue
 
                     # group by medium so each op_id has consistent medium/reason
-                    groups: dict[str, list] = {}
+                    groups: dict[str, list] = {}  # type: ignore
                     for item in batch:
                         groups.setdefault(item["medium"], []).append(item)
 
@@ -301,11 +314,13 @@ async def _serve(
                                 hive_client=hive_client,
                                 keys=[hive_posting_key],
                                 id=op_id,
-                                nobroadcast=no_broadcast,
                             )
                             trx_id = trx.get("trx_id", "N/A")
+                            rpc_ulr = (
+                                hive_client.rpc.url if hive_client and hive_client.rpc else "N/A"
+                            )
                             logging.info(
-                                f"PODPING sent op={op_id} count={len(items)} trx_id={trx_id}"
+                                f"PODPING sent op={op_id} count={len(items)} {trx_id=} {rpc_ulr=}"
                             )
                         except Exception:
                             logging.exception(
@@ -319,8 +334,6 @@ async def _serve(
                             await queue.mark_sent(
                                 item["url"], item["medium"], item["reason"], trx_id
                             )
-
-                    last_run[reason_str] = now
 
                 # housekeeping
                 await queue.purge_old_sent()

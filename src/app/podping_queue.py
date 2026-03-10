@@ -175,3 +175,43 @@ class PodpingQueue:
         cutoff = time.time() - PURGE_SENT_AFTER_SECONDS
         await self._db.execute("DELETE FROM sent_podpings WHERE sent_at < ?", (cutoff,))
         await self._db.commit()
+
+    # ------------------------------------------------------------------
+    # Convenience helpers for background batching logic
+    # ------------------------------------------------------------------
+
+    async def oldest_pending(self, reason: str | None = None) -> float | None:
+        """Return the oldest ``received_at`` timestamp for pending rows.
+
+        If ``reason`` is provided, only rows matching that reason are
+        considered.  Returns ``None`` when there are no pending items.
+        This allows callers (e.g. the processing loop in :mod:`api`) to decide
+        whether the oldest entry has been sitting around long enough to send a
+        batch.
+        """
+        assert self._db is not None
+        if reason is not None:
+            query = "SELECT MIN(received_at) FROM pending_podpings WHERE reason = ?"
+            params = (reason,)
+        else:
+            query = "SELECT MIN(received_at) FROM pending_podpings"
+            params = ()
+
+        async with self._db.execute(query, params) as cur:
+            row = await cur.fetchone()
+        if not row or row[0] is None:
+            return None
+        return row[0]
+
+    async def ready_to_send(self, reason: str, interval: float) -> bool:
+        """Return ``True`` when a batch for ``reason`` should be dequeued.
+
+        This is *independent* of the deduplication logic: we simply look at the
+        timestamp of the oldest pending row and ensure it has been in the queue
+        for at least ``interval`` seconds.  It keeps the batching semantics local
+        to the queue layer so that the API's background loop remains clean.
+        """
+        oldest = await self.oldest_pending(reason)
+        if oldest is None:
+            return False
+        return time.time() - oldest >= interval

@@ -9,7 +9,8 @@ Built with **uv** for package management, **Typer** for the CLI, and **aiosqlite
 - **`GET /`** endpoint accepting `url`, `reason`, and `medium` query parameters
 - **Disk-backed queue** — incoming URLs are immediately written to a SQLite WAL-mode database; safe against crashes the moment the HTTP 200 is returned
 - **Deduplication** — the same URL will not be re-sent within a configurable window (default 180 seconds), both within a single batch and across batches
-- **Background processing loop** — every 10 seconds the queue is drained, deduplicated, and logged (placeholder for Hive broadcast)
+- **Batching interval** — each reason has a configurable delay (``REASON_INTERVALS``) during which the oldest pending URL is held in the queue.  this lets several feeds accumulate before a single podping is emitted, e.g. with a 10‑second interval you will see all updates arriving during that window grouped together.
+- **Background processing loop** — every 10 seconds the queue is inspected and eligible batches are sent; the above interval controls eligibility rather than the loop period itself
 - **Sent history with `trx_id`** — processed items are recorded with their Hive transaction ID; history is purged after 24 hours
 - **Crash recovery** — pending items survive process restarts; on startup the queue reports how many items were carried over
 - **Typer CLI** — `python src/app/api.py --host 0.0.0.0 --port 1820` runs both the FastAPI server and the background loop concurrently via `asyncio.gather`
@@ -107,7 +108,10 @@ Response:
 | Constant | Location | Default | Description |
 |---|---|---|---|
 | `DEFAULT_DB_PATH` | `api.py` | `data/podping_queue.db` | SQLite database file path |
-| `BATCH_INTERVAL_SECONDS` | `api.py` | `10` | How often the background loop processes the queue |
+| `BATCH_INTERVAL_SECONDS` | `api.py` | `10` | How often the background loop wakes up to inspect the queue |
+| `REASON_INTERVALS` | `api.py` | see source | Minimum time each pending URL is held before being included in a
+  podping.  The first item for a given reason is buffered for this interval so
+  that subsequent arrivals are batched together. |
 | `DEDUP_WINDOW_SECONDS` | `queue.py` | `180` | Ignore duplicate URLs sent within this window |
 | `PURGE_SENT_AFTER_SECONDS` | `queue.py` | `86400` | Remove sent history older than this (24h) |
 

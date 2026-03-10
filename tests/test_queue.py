@@ -154,3 +154,34 @@ async def test_multiple_urls_partial_dedup(queue: PodpingQueue):
     assert len(upd) == 1 and upd[0]["url"].endswith("/a")
     live = await queue.dequeue_batch(reason="live")
     assert len(live) == 1 and live[0]["url"].endswith("/b")
+
+
+@pytest.mark.asyncio
+async def test_oldest_pending_and_ready(queue: PodpingQueue, monkeypatch):
+    """Verify that ``oldest_pending`` returns the correct timestamp and that
+    ``ready_to_send`` respects the supplied interval."""
+    # start with an empty queue
+    assert await queue.oldest_pending() is None
+    # enqueue a couple of items at roughly the same time
+    t0 = time.time()
+    await queue.enqueue("https://foo/1", "podcast", "update")
+    await queue.enqueue("https://foo/2", "podcast", "update")
+
+    oldest = await queue.oldest_pending("update")
+    assert oldest is not None and abs(oldest - t0) < 1.0
+
+    # if we pretend only a few seconds have passed, the interval check fails
+    # patch the module's time() so that ready_to_send uses the fake clock
+    import app.podping_queue as pq
+
+    monkeypatch.setattr(pq.time, "time", lambda: t0 + 5)
+    assert not await queue.ready_to_send("update", interval=10)
+
+    # after the interval has elapsed it should become true
+    monkeypatch.setattr(pq.time, "time", lambda: t0 + 11)
+    assert await queue.ready_to_send("update", interval=10)
+
+    # once ready, a dequeue should return all of the items we pushed earlier
+    batch = await queue.dequeue_batch(reason="update")
+    urls = {item["url"] for item in batch}
+    assert urls == {"https://foo/1", "https://foo/2"}
