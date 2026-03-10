@@ -11,9 +11,9 @@ from fastapi.concurrency import asynccontextmanager
 from pydantic import HttpUrl, ValidationError
 
 # absolute import to support running as a script
-from app import __version__
-from app.hive_actions import get_hive_client, send_custom_json
-from app.podping_queue import PodpingQueue
+from hivepinger import __version__
+from hivepinger.hive_actions import get_hive_client, send_custom_json
+from hivepinger.podping_queue import PodpingQueue
 from models.podping import (
     CURRENT_PODPING_VERSION,
     HiveOperationId,
@@ -350,7 +350,7 @@ if __name__ == "__main__":
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s %(levelname)-8s %(module)-25s %(lineno)4d : %(message)s",
-        datefmt="%m-%dT%H:%M:%S.%f",
+        datefmt="%m-%dT%H:%M:%S%z",
     )
     logging.info("Application startup: initializing resources")
     cli()

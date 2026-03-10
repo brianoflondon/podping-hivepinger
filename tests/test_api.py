@@ -1,7 +1,7 @@
 import pytest
 from fastapi.testclient import TestClient
 
-from app.api import create_app
+from hivepinger.api import create_app
 
 
 @pytest.fixture

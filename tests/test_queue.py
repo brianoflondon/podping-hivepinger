@@ -5,7 +5,7 @@ import time
 import pytest
 import pytest_asyncio
 
-from app.podping_queue import DEDUP_WINDOW_SECONDS, PURGE_SENT_AFTER_SECONDS, PodpingQueue
+from hivepinger.podping_queue import DEDUP_WINDOW_SECONDS, PURGE_SENT_AFTER_SECONDS, PodpingQueue
 
 
 @pytest_asyncio.fixture
@@ -172,7 +172,7 @@ async def test_oldest_pending_and_ready(queue: PodpingQueue, monkeypatch):
 
     # if we pretend only a few seconds have passed, the interval check fails
     # patch the module's time() so that ready_to_send uses the fake clock
-    import app.podping_queue as pq
+    import hivepinger.podping_queue as pq
 
     monkeypatch.setattr(pq.time, "time", lambda: t0 + 5)
     assert not await queue.ready_to_send("update", interval=10)

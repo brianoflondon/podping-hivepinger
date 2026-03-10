@@ -1,31 +1,11 @@
 {
     "configurations": [
         {
-            "name": "FastAPI",
-            "type": "debugpy",
-            "request": "launch",
-            "python": "${workspaceFolder}/.venv/bin/python",
-            "consoleName": "FastApi",
-            "console": "integratedTerminal",
-            "module": "uvicorn",
-            "args": [
-                "app.api:app",
-                "--reload",
-                "--host",
-                "0.0.0.0",
-                "--port",
-                "1820"
-            ],
-            "env": {
-                "PYTHONPATH": "${workspaceFolder}/src"
-            }
-        },
-        {
             "name": "FastAPI (CLI serve)",
             "type": "debugpy",
             "request": "launch",
             "python": "${workspaceFolder}/.venv/bin/python",
-            "program": "${workspaceFolder}/src/app/api.py",
+            "program": "${workspaceFolder}/src/hivepinger/api.py",
             "args": [
                 "--host",
                 "0.0.0.0",

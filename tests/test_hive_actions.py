@@ -2,7 +2,7 @@ from decimal import Decimal
 
 import pytest
 
-from app import hive_actions
+from hivepinger import hive_actions
 
 
 class DummyHive:
