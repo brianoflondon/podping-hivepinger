@@ -8,12 +8,12 @@ import typer
 import uvicorn
 from fastapi import APIRouter, FastAPI, HTTPException, Query, Request
 from fastapi.concurrency import asynccontextmanager
-from pydantic import ValidationError, HttpUrl
+from pydantic import HttpUrl, ValidationError
 
 # absolute import to support running as a script
 from app import __version__
 from app.hive_actions import get_hive_client, send_custom_json
-from app.queue import PodpingQueue
+from app.podping_queue import PodpingQueue
 from models.podping import (
     CURRENT_PODPING_VERSION,
     HiveOperationId,
@@ -119,12 +119,22 @@ def create_app(db_path: str = DEFAULT_DB_PATH, session_id: int | None = None) ->
     @app.get("/health")
     @app.get("/status")
     async def health():
+        # check length of queue to ensure DB is responsive; we don't want to return 200 if the queue is stuck
+        queue: PodpingQueue = app.state.queue  # type: ignore
+        try:
+            pending_count = await queue.count_pending()
+            if pending_count > 0:
+                logging.warning(f"Health check: {pending_count} pending items in queue")
+        except Exception as exc:
+            logging.error(f"Health check failed: unable to access queue: {exc}")
+            raise HTTPException(status_code=503, detail="Queue inaccessible")
         return {
             "message": "Welcome to Podping HivePinger API",
             "version": __version__,
             "status": "OK",
             "session_id": session_id,
             "documentation": "/docs",
+            "pending_queue_length": pending_count,
         }
 
     app.include_router(main_router, tags=["main"])

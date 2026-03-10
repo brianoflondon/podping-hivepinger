@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Set
 
 import aiosqlite
+from pydantic import HttpUrl
 
 DEDUP_WINDOW_SECONDS = 180  # ignore duplicate URLs within this window
 PURGE_SENT_AFTER_SECONDS = 86400  # 24 hours
@@ -46,7 +47,7 @@ class PodpingQueue:
         await self._db.execute("PRAGMA journal_mode=WAL")
         await self._db.executescript(_SCHEMA)
         await self._db.commit()
-        pending = await self._count_pending()
+        pending = await self.count_pending()
         if pending:
             logging.info(f"Queue opened with {pending} pending items from previous run")
 
@@ -55,7 +56,7 @@ class PodpingQueue:
             await self._db.close()
             self._db = None
 
-    async def _count_pending(self) -> int:
+    async def count_pending(self) -> int:
         assert self._db is not None
         async with self._db.execute("SELECT COUNT(*) FROM pending_podpings") as cur:
             row = await cur.fetchone()
@@ -63,7 +64,7 @@ class PodpingQueue:
                 return 0
             return row[0]
 
-    async def enqueue(self, url: str, medium: str, reason: str) -> int:
+    async def enqueue(self, url: HttpUrl, medium: str, reason: str) -> int:
         """Insert a URL into the pending queue. Returns the row id."""
         assert self._db is not None
         now = time.time()

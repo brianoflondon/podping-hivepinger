@@ -5,7 +5,7 @@ import time
 import pytest
 import pytest_asyncio
 
-from app.queue import DEDUP_WINDOW_SECONDS, PURGE_SENT_AFTER_SECONDS, PodpingQueue
+from app.podping_queue import DEDUP_WINDOW_SECONDS, PURGE_SENT_AFTER_SECONDS, PodpingQueue
 
 
 @pytest_asyncio.fixture
