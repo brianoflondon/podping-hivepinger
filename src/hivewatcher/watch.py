@@ -113,7 +113,8 @@ async def async_watch(
                 )
                 logging.warning(exc)
                 continue
-            print(f"{podping}")
+            # include the operation id in output for easier debugging/testing
+            print(f"{podping} id={op.get('id', '')}")
             print(f"{posting_account} in trx {op.get('trx_id', '')}")
             for iri in podping.iris:
                 print(f"  - {iri}")
@@ -149,4 +150,10 @@ async def send_test_podping(
 
 
 if __name__ == "__main__":  # allow ``python -m hivewatcher.watch``
-    cli()
+    try:
+        cli()
+    except (KeyboardInterrupt, SystemExit):
+        logging.info("Watcher stopped by user")
+    except Exception as exc:
+        logging.exception(f"Watcher encountered an unexpected exception: {exc}")
+        raise

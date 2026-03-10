@@ -65,10 +65,29 @@ class PodpingQueue:
             return row[0]
 
     async def enqueue(self, url: HttpUrl, medium: str, reason: str) -> int:
-        """Insert a URL into the pending queue. Returns the row id."""
+        """Insert a URL into the pending queue.
+
+        Before inserting we perform the RC-style dedup check against the
+        ``sent_podpings`` table.  If the URL was sent within the dedup window
+        we log and return ``0`` to indicate nothing was added.  This ensures the
+        expensive query is done once at enqueue time instead of on every
+        dequeue/peek that touches the backlog.
+        """
         assert self._db is not None
         url_str = str(url)
         now = time.time()
+
+        # dedup against sent records
+        cutoff = now - DEDUP_WINDOW_SECONDS
+        async with self._db.execute(
+            "SELECT 1 FROM sent_podpings WHERE url = ? AND sent_at > ? LIMIT 1",
+            (url_str, cutoff),
+        ) as cur:
+            recently = await cur.fetchone()
+        if recently:
+            logging.debug(f"Dedup skip: {url_str} was sent within last {DEDUP_WINDOW_SECONDS}s")
+            return 0
+
         async with self._db.execute(
             "INSERT INTO pending_podpings (url, medium, reason, received_at) VALUES (?, ?, ?, ?)",
             (url_str, medium, reason, now),
@@ -80,15 +99,37 @@ class PodpingQueue:
     async def dequeue_batch(
         self, medium: str | None = None, reason: str | None = None
     ) -> List[Dict[str, Any]]:
-        """Fetch pending items, optionally filtering by medium/reason.
+        """Fetch and remove pending items, optionally filtering by medium/reason.
 
-        Only rows matching the provided ``medium`` and/or ``reason`` values are
-        returned.  The selected items are deduplicated against recently sent
-        records and removed from the pending table just as before.
+        The behaviour is unchanged from legacy versions: matching rows are
+        deduplicated, returned, and removed from the pending table _before_
+        the caller has a chance to send them.  This is convenient when the
+        caller doesn't need to retry on failure but is unsafe when dispatch
+        operations may fail (because items are lost).
 
-        Returns a list of dicts with keys: id, url, medium, reason, received_at.
-        Items are ordered by insertion id.  Duplicates (within the batch or
-        against recently sent) are dropped silently.
+        Returns a list of dicts with keys: id, url, medium, reason,
+        received_at.  Items are ordered by insertion id.  Duplicates (within
+        the batch or against recently sent) are dropped silently.
+        """
+        assert self._db is not None
+
+        # delegate to peek_batch and then delete the returned ids
+        to_send, all_ids = await self.peek_batch(medium=medium, reason=reason)
+        if all_ids:
+            await self.remove_pending(all_ids)
+        return to_send
+
+    async def peek_batch(
+        self, medium: str | None = None, reason: str | None = None
+    ) -> tuple[List[Dict[str, Any]], List[int]]:
+        """Return a batch of pending items without deleting them.
+
+        This is the non‑destructive counterpart to :meth:`dequeue_batch`.
+        It performs the same filtering and deduplication logic but leaves the
+        rows in the database.  The caller can later remove the rows via
+        :meth:`remove_pending` on successful dispatch.  ``all_ids`` contains
+        every row id that matched the query, not just those that passed
+        deduplication, mirroring the old behaviour.
         """
         assert self._db is not None
 
@@ -109,12 +150,11 @@ class PodpingQueue:
             base += " WHERE " + " AND ".join(clauses)
         base += " ORDER BY id"
 
-        # grab everything pending that matches the filters
         async with self._db.execute(base, params) as cur:
             rows = await cur.fetchall()
 
         if not rows:
-            return []
+            return [], []
 
         to_send: List[Dict[str, Any]] = []
         all_ids: List[int] = []
@@ -123,41 +163,40 @@ class PodpingQueue:
         for row_id, url, medium, reason, received_at in rows:
             all_ids.append(row_id)
 
-            # skip if we already picked this URL in this batch
+            # skip any URL we’ve already processed this batch (either because it
+            # was marked sent or because it was queued to send).  doing it here
+            # prevents repeated log lines.
             if url in seen_in_batch:
-                logging.debug(f"Dedup skip (intra-batch): {url}")
                 continue
 
-            # check dedup against recently sent
-            async with self._db.execute(
-                "SELECT 1 FROM sent_podpings WHERE url = ? AND sent_at > ? LIMIT 1",
-                (url, cutoff),
-            ) as cur:
-                already_sent = await cur.fetchone()
-            if already_sent:
-                logging.info(f"Dedup skip: {url} was sent within last {DEDUP_WINDOW_SECONDS}s")
-            else:
-                seen_in_batch.add(url)
-                to_send.append(
-                    {
-                        "id": row_id,
-                        "url": url,
-                        "medium": medium,
-                        "reason": reason,
-                        "received_at": received_at,
-                    }
-                )
-
-        # remove ALL pending rows (including dupes) in one statement
-        if all_ids:
-            placeholders = ",".join("?" for _ in all_ids)
-            await self._db.execute(
-                f"DELETE FROM pending_podpings WHERE id IN ({placeholders})",
-                all_ids,
+            seen_in_batch.add(url)
+            to_send.append(
+                {
+                    "id": row_id,
+                    "url": url,
+                    "medium": medium,
+                    "reason": reason,
+                    "received_at": received_at,
+                }
             )
-            await self._db.commit()
 
-        return to_send
+        return to_send, all_ids
+
+    async def remove_pending(self, ids: List[int]):
+        """Delete pending rows by their ``id``.
+
+        This is primarily intended for use after a successful dispatch of the
+        items returned by :meth:`peek_batch`.
+        """
+        if not ids:
+            return
+        assert self._db is not None
+        placeholders = ",".join("?" for _ in ids)
+        await self._db.execute(
+            f"DELETE FROM pending_podpings WHERE id IN ({placeholders})",
+            ids,
+        )
+        await self._db.commit()
 
     async def mark_sent(self, url: str, medium: str, reason: str, trx_id: str):
         """Record a successfully sent podping for dedup tracking."""

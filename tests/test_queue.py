@@ -49,12 +49,14 @@ async def test_dedup_blocks_recently_sent(queue: PodpingQueue):
     # simulate having sent it just now
     await queue.mark_sent(url, "music", "live", "abc123")
 
-    # enqueue the same URL again
-    await queue.enqueue(url, "music", "live")
+    # enqueue the same URL again – dedup now happens on enqueue
+    row = await queue.enqueue(url, "music", "live")
+    assert row == 0
 
-    # dequeue should return nothing (dedup window of 180s)
+    # queue should remain unchanged
     batch = await queue.dequeue_batch()
-    assert len(batch) == 0
+    assert len(batch) == 1
+    assert batch[0]["url"] == url
 
 
 @pytest.mark.asyncio
@@ -127,6 +129,33 @@ async def test_crash_recovery(tmp_path):
     assert len(batch) == 1
     assert batch[0]["url"] == "https://example.com/survive.xml"
     await q2.close()
+
+
+@pytest.mark.asyncio
+async def test_peek_and_remove(queue: PodpingQueue):
+    # pushing two items
+    id1 = await queue.enqueue("https://peek/1", "podcast", "update")
+    id2 = await queue.enqueue("https://peek/2", "podcast", "update")
+
+    # peek without deleting
+    batch, ids = await queue.peek_batch()
+    assert len(batch) == 2
+    assert set(ids) == {id1, id2}
+
+    # queue still contains the items
+    batch2 = await queue.dequeue_batch()
+    assert len(batch2) == 2
+
+    # reinstate for remove_pending test
+    await queue.enqueue("https://peek/3", "podcast", "update")
+    await queue.enqueue("https://peek/4", "podcast", "update")
+    batch3, ids3 = await queue.peek_batch()
+    assert len(batch3) == 2
+    # delete only one of them
+    await queue.remove_pending([ids3[0]])
+    rem = await queue.dequeue_batch()
+    assert len(rem) == 1
+    assert rem[0]["id"] == ids3[1]
 
 
 @pytest.mark.asyncio

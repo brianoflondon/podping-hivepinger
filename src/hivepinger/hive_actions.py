@@ -4,7 +4,7 @@ from typing import Any, Dict, List
 
 from nectar.exceptions import MissingKeyError
 from nectar.hive import Hive
-from nectarapi.exceptions import UnhandledRPCError
+from nectarapi.exceptions import RPCError, UnhandledRPCError
 
 
 def get_hive_client(keys: List[str], nobroadcast: bool = False) -> Hive:
@@ -110,6 +110,19 @@ async def send_custom_json(
             extra={"send_account": send_account},
         )
         raise CustomJsonSendError("Wrong key used", extra={"send_account": send_account})
+    except RPCError as ex:
+        msg = str(ex)
+        if "has not enough RC mana" in msg:
+            # handle rate‑limit / RC‑exhaustion, back off, etc.
+            logging.warning(
+                f"Rate limit / RC exhaustion: {msg}", extra={"send_account": send_account}
+            )
+            raise CustomJsonSendError(
+                "Rate limit / RC exhaustion", extra={"send_account": send_account}
+            )
+        else:
+            # re‑raise or wrap as before
+            raise CustomJsonSendError(f"RPC error: {msg}", extra={"send_account": send_account})
     except Exception as ex:
         logging.exception(ex, extra={"notification": False})
         logging.error(f"{send_account} {ex} {ex.__class__}")

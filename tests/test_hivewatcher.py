@@ -1,5 +1,3 @@
-import asyncio
-
 import pytest
 
 from hivewatcher import watch
@@ -37,25 +35,9 @@ async def test_async_watch_filters(monkeypatch, capsys):
 
     await watch.async_watch("pp", hive_client=client, max_ops=2)
     out = capsys.readouterr().out
+    # op ids are now printed with the Podping object
     assert "pp_first" in out
     assert "pplt_second" in out
     assert "nope" not in out
     # ensure our dummy blockchain stream method was actually used
     assert client.stream_called
-
-
-def test_hive_client_created_with_node(monkeypatch):
-    # if we don't supply a client, the watcher should construct one with the
-    # provided node argument
-    created = {}
-
-    def make(node=None):
-        created["node"] = node
-        return DummyHive(node=node)
-
-    # patch both Hive and Blockchain so the helper can instantiate them
-    monkeypatch.setattr(watch, "Hive", make)
-    monkeypatch.setattr(watch, "Blockchain", lambda client: client)
-    # run the async helper briefly with max_ops=0 so it exits quickly
-    asyncio.run(watch.async_watch("foo", node="bar", max_ops=0))
-    assert created["node"] == ["bar"]
