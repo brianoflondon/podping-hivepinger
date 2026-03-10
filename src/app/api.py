@@ -144,6 +144,9 @@ def serve(
     hive_posting_key: str = typer.Option(
         None, help="Hive posting key for signing transactions (optional)"
     ),
+    podping_prefix: str = typer.Option(
+        "pp", help="Prefix for Hive operation IDs (default: 'pp', use 'pplt' for testing)"
+    ),
 ):
     """Run the FastAPI server and any additional async tasks."""
     if not hive_account_name:
@@ -163,7 +166,11 @@ def serve(
         logging.warning(
             "Hive account name or posting key not provided. Hive operations will not be sent."
         )
-    asyncio.run(_serve(host, port, workers, hive_account_name, hive_posting_key, no_broadcast))
+    asyncio.run(
+        _serve(
+            host, port, workers, hive_account_name, hive_posting_key, no_broadcast, podping_prefix
+        )
+    )
 
 
 async def _serve(
@@ -173,6 +180,7 @@ async def _serve(
     hive_account_name: str,
     hive_posting_key: str,
     no_broadcast: bool = False,
+    podping_prefix: str = "pp",
 ):
     session_id = uuid.uuid4().int & (1 << 64) - 1
     app = create_app(session_id=session_id)
@@ -201,12 +209,13 @@ async def _serve(
         v=__version__,
         pinging_app="hivepinger",
     )
+    startup_op_id = str(HiveOperationId(prefix=podping_prefix, startup=True))
     startup_trx = await send_custom_json(
         json_data=startup_podping.model_dump(),
         send_account=hive_account_name,
         hive_client=hive_client,
         keys=[hive_posting_key],
-        id="pp_startup",
+        id=startup_op_id,
         nobroadcast=no_broadcast,
     )
     logging.info(
@@ -273,7 +282,7 @@ async def _serve(
 
                         op_id = str(
                             HiveOperationId(
-                                podping="podping",
+                                prefix=podping_prefix,
                                 medium=Medium(medium),
                                 reason=Reason(reason_str),
                             )

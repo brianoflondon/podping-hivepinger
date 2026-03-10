@@ -42,7 +42,9 @@ class Podping(BaseModel):
 
     # ``default=`` makes the parameter visible to static analysis tools so that
     # calls to ``Podping(...)`` without ``version`` do not raise warnings.
-    version: str = Field(default=CURRENT_PODPING_VERSION, description="Version of the podping schema")
+    version: str = Field(
+        default=CURRENT_PODPING_VERSION, description="Version of the podping schema"
+    )
     medium: Medium = Field(..., description="Medium of the podping")
     reason: Reason = Field(..., description="Reason for the podping")
     iris: List[str] = Field(..., description="List of IRIs associated with the podping")
@@ -78,13 +80,15 @@ class StartupPodping(BaseModel):
 class HiveOperationId:
     def __init__(
         self,
-        podping: str,
+        prefix: str,
         medium: Medium = Medium.PODCAST,
         reason: Reason = Reason.UPDATE,
+        startup: bool = False,
     ):
-        self.podping: str = podping
+        self.prefix: str = prefix
         self.medium: Medium = medium
         self.reason: Reason = reason
+        self.startup: bool = startup
 
     def __eq__(self, other):
         return str(self) == str(other)
@@ -96,4 +100,6 @@ class HiveOperationId:
         return hash(str(self))
 
     def __str__(self):
-        return f"{self.podping}_{self.medium}_{str(self.reason).replace('_', '-')}"
+        if not self.startup:
+            return f"{self.prefix}_{self.medium}_{str(self.reason).replace('_', '-')}"
+        return f"{self.prefix}_startup"
