@@ -26,8 +26,9 @@ WORKDIR /hivepinger
 # copy the venv from the builder
 COPY --from=builder /hivepinger/.venv /hivepinger/.venv
 
-# copy source
+# copy source and project metadata required for version detection
 COPY --from=builder /hivepinger/src /hivepinger/src
+COPY --from=builder /hivepinger/pyproject.toml /hivepinger/pyproject.toml
 
 # ensure the venv python is first on PATH
 ENV PATH="/hivepinger/.venv/bin:$PATH"

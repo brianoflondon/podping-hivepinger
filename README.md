@@ -13,7 +13,7 @@ Built with **uv** for package management, **Typer** for the CLI, and **aiosqlite
 - **Background processing loop** — every 10 seconds the queue is inspected and eligible batches are sent; the above interval controls eligibility rather than the loop period itself
 - **Sent history with `trx_id`** — processed items are recorded with their Hive transaction ID; history is purged after 24 hours
 - **Crash recovery** — pending items survive process restarts; on startup the queue reports how many items were carried over
-- **Typer CLI** — `python src/app/api.py --host 0.0.0.0 --port 1820` runs both the FastAPI server and the background loop concurrently via `asyncio.gather`
+- **Typer CLI** — `python src/hivepinger/api.py --host 0.0.0.0 --port 1820` runs both the FastAPI server and the background loop concurrently via `asyncio.gather`
 - **Health endpoints** — `GET /health` and `GET /status` return version and server info
 - **Reverse proxy support** — middleware trusts `X-Forwarded-Proto` and `X-Forwarded-Host` headers
 - **Structured logging** — timestamps, module name, and line numbers in every log line
@@ -22,15 +22,16 @@ Built with **uv** for package management, **Typer** for the CLI, and **aiosqlite
 
 ```
 src/
-  app/
-    __init__.py        # version detection via single-source
+  hivepinger/
+    __init__.py        # version detection via importlib.metadata + single-source fallback
     api.py             # FastAPI app, Typer CLI, background loop
-    podping_queue.py    # PodpingQueue — SQLite-backed queue with dedup
+    podping_queue.py   # PodpingQueue — SQLite-backed queue with dedup
   models/
     podping.py         # Mediums/Reasons enums
 tests/
   test_api.py          # API endpoint tests (lifespan-aware TestClient)
   test_queue.py        # Queue unit tests: enqueue, dedup, crash recovery, purge
+  test_version.py      # validate ``__version__`` lookup logic
 data/                  # SQLite database (created automatically, gitignored)
 Dockerfile             # Multi-stage build with uv
 docker-compose.yml     # Maps ./data:/data for persistent storage
@@ -47,7 +48,7 @@ pyproject.toml         # Dependencies and project metadata
 uv sync
 
 # run via the Typer CLI (starts FastAPI + background loop)
-uv run python src/app/api.py --host 0.0.0.0 --port 1820
+uv run python src/hivepinger/api.py --host 0.0.0.0 --port 1820
 
 # or run FastAPI alone with uvicorn (no background loop)
 uv run uvicorn app.api:app --reload --host 0.0.0.0 --port 1820
@@ -60,7 +61,7 @@ Two configurations are provided in `.vscode/launch.json`:
 | Configuration | What it runs |
 |---|---|
 | **FastAPI** | `uvicorn app.api:app --reload` — API only, hot-reload |
-| **FastAPI (CLI serve)** | `python src/app/api.py --host 0.0.0.0 --port 1820` — API + background loop |
+| **FastAPI (CLI serve)** | `python src/hivepinger/api.py --host 0.0.0.0 --port 1820` — API + background loop |
 
 ### Docker
 
@@ -105,6 +106,23 @@ Response:
 
 ## Configuration
 
+The application reads Hive credentials from environment variables.  A sample
+file is provided at `.env.sample` (gitignored when copied to `.env`).  You
+should copy this to `.env` or otherwise supply the variables in your shell
+before starting the service.  Both variables **must** be set to valid values
+from a Hive account that will be used to post podpings:
+
+```ini
+HIVE_ACCOUNT_NAME=<your hive account name>
+HIVE_POSTING_KEY=<your posting key starting with STM…>
+```
+
+The posting key is used only for broadcast operations; it should **not** be
+shared or checked into source control.
+
+
+## Configuration
+
 | Constant | Location | Default | Description |
 |---|---|---|---|
 | `DEFAULT_DB_PATH` | `api.py` | `data/podping_queue.db` | SQLite database file path |
@@ -118,7 +136,7 @@ Response:
 ## CLI options
 
 ```
-python src/app/api.py --help
+python src/hivepinger/api.py --help
 
 Options:
   --host TEXT               Host to run the server on [default: 0.0.0.0]
