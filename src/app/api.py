@@ -37,9 +37,6 @@ REASON_INTERVALS: dict[str, float] = {
     Reason.NEW_IRI.value: 60,
 }
 
-BATCH_INTERVAL_SECONDS = 10
-
-
 def create_lifespan(db_path: str = DEFAULT_DB_PATH):
     """Factory function to create lifespan with queue init/teardown"""
 

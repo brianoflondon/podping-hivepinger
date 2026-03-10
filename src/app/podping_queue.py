@@ -67,10 +67,11 @@ class PodpingQueue:
     async def enqueue(self, url: HttpUrl, medium: str, reason: str) -> int:
         """Insert a URL into the pending queue. Returns the row id."""
         assert self._db is not None
+        url_str = str(url)
         now = time.time()
         async with self._db.execute(
             "INSERT INTO pending_podpings (url, medium, reason, received_at) VALUES (?, ?, ?, ?)",
-            (url, medium, reason, now),
+            (url_str, medium, reason, now),
         ) as cur:
             row_id = cur.lastrowid
         await self._db.commit()
