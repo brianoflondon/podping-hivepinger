@@ -33,11 +33,14 @@ COPY --from=builder /app/src /app/src
 ENV PATH="/app/.venv/bin:$PATH"
 ENV PYTHONPATH="/app/src"
 
-# create the data directory for the SQLite queue
-RUN mkdir -p /data
+# create the data directory for the SQLite queue; the app expects
+# ``data`` relative to the working directory (/app)
+RUN mkdir -p /app/data
 
 EXPOSE 1820
 
-# run the CLI entrypoint
-ENTRYPOINT ["python", "src/app/api.py", "serve"]
-CMD ["--host", "0.0.0.0", "--port", "1820"]
+# run the API script; any arguments (host/port/prefix, etc.)
+# are supplied by the caller (docker-compose or `docker run`).
+ENTRYPOINT ["python", "src/app/api.py"]
+# default to nothing, let caller set options
+CMD []

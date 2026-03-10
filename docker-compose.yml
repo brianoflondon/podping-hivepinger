@@ -1,11 +1,35 @@
 services:
   podping-hivepinger:
+    # build locally if you have the Dockerfile; the image name is handy for
+    # pushing to a registry later
     build: .
+    image: brianoflondon/podping-hivepinger:main
+    container_name: hivepinger
     ports:
       - "1820:1820"
     volumes:
-      # persist the SQLite queue database on the host
-      - ./data:/data
+      # persist the SQLite queue database on the host; the application writes
+      # to /app/data by default, so mirror that path rather than /data
+      - ./data:/app/data
     environment:
       - PYTHONUNBUFFERED=1
+      # you can also set a custom DB path if you update the code to read from
+      # an env var (not currently implemented):
+      # - DB_PATH=/app/data/podping_queue.db
+    env_file:
+      - .env
+    command: [
+      "--host",
+      "0.0.0.0",
+      "--port",
+      "1820",
+      "--podping-prefix",
+      "pplt",
+    ]
+    healthcheck:
+      test: ["CMD", "python", "src/health_check.py", "--host", "localhost", "--port", "1820" , "--pretty"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
     restart: unless-stopped
