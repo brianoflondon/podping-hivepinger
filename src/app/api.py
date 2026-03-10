@@ -8,7 +8,7 @@ import typer
 import uvicorn
 from fastapi import APIRouter, FastAPI, HTTPException, Query, Request
 from fastapi.concurrency import asynccontextmanager
-from pydantic import ValidationError
+from pydantic import ValidationError, HttpUrl
 
 # absolute import to support running as a script
 from app import __version__
@@ -68,7 +68,7 @@ main_router = APIRouter(prefix="")
 @main_router.get("/")
 async def root(
     request: Request,
-    url: str = Query(..., description="URL to podping"),
+    url: HttpUrl = Query(..., description="URL to podping"),
     reason: Reason = Query(Reason.UPDATE, description="Reason string"),
     medium: Medium = Query(Medium.PODCAST, description="Medium string"),
 ):
@@ -116,10 +116,9 @@ def create_app(db_path: str = DEFAULT_DB_PATH, session_id: int | None = None) ->
         response = await call_next(request)
         return response
 
-    # Add root endpoint here
     @app.get("/health")
     @app.get("/status")
-    async def root():
+    async def health():
         return {
             "message": "Welcome to Podping HivePinger API",
             "version": __version__,

@@ -30,7 +30,9 @@
                 "--host",
                 "0.0.0.0",
                 "--port",
-                "1820"
+                "1820",
+                "--podping-prefix",
+                "pplt"
             ],
             "env": {
                 "PYTHONPATH": "${workspaceFolder}/src"

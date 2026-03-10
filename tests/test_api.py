@@ -32,3 +32,12 @@ def test_root_success(client):
 def test_root_validation_error(client):
     response = client.get("/", params={"url": "", "reason": "bad", "medium": "nope"})
     assert response.status_code == 422
+
+
+def test_root_url_must_be_valid(client):
+    # passing a non-URL should trigger pydantic validation error
+    response = client.get("/", params={"url": "not-a-url", "reason": "update", "medium": "music"})
+    assert response.status_code == 422
+    body = response.json()
+    # ensure error refers to the url field and mentions 'url'
+    assert any(err.get("loc") and err["loc"][1] == "url" for err in body["detail"])
