@@ -1,4 +1,5 @@
 from enum import StrEnum
+from time import time
 from typing import List
 
 from pydantic import BaseModel, Field
@@ -45,11 +46,15 @@ class Podping(BaseModel):
     version: str = Field(
         default=CURRENT_PODPING_VERSION, description="Version of the podping schema"
     )
-    medium: Medium = Field(..., description="Medium of the podping")
-    reason: Reason = Field(..., description="Reason for the podping")
-    iris: List[str] = Field(..., description="List of IRIs associated with the podping")
-    timestampNs: int = Field(..., description="Timestamp in nanoseconds")
-    sessionId: int = Field(..., description="Session ID associated with the podping")
+    medium: Medium = Field(Medium.PODCAST, description="Medium of the podping")
+    reason: Reason = Field(Reason.UPDATE, description="Reason for the podping")
+    iris: List[str] = Field(
+        default_factory=list, description="List of IRIs associated with the podping"
+    )
+    timestampNs: int = Field(
+        default_factory=lambda: int(time() * 1e9), description="Timestamp in nanoseconds"
+    )
+    sessionId: int = Field(0, description="Session ID associated with the podping")
 
 
 class StartupPodping(BaseModel):

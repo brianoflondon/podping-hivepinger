@@ -31,7 +31,7 @@ DEFAULT_DB_PATH = "data/podping_queue.db"
 # values as desired; new reasons added to the ``Reason`` enum will default to
 # 10 seconds unless overridden here.
 REASON_INTERVALS: dict[str, float] = {
-    Reason.UPDATE.value: 10,
+    Reason.UPDATE.value: 100,
     Reason.LIVE.value: 1,
     Reason.LIVE_END.value: 30,
     Reason.NEW_IRI.value: 60,
@@ -173,6 +173,9 @@ def serve(
         logging.warning(
             "Hive account name or posting key not provided. Hive operations will not be sent."
         )
+    logging.info(
+        f"Sending podpings with account={hive_account_name} no_broadcast={no_broadcast} prefix={podping_prefix}"
+    )
     asyncio.run(
         _serve(
             host, port, workers, hive_account_name, hive_posting_key, no_broadcast, podping_prefix

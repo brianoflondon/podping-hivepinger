@@ -1,6 +1,22 @@
 {
     "configurations": [
         {
+            "name": "Watch",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/src/hivewatcher/watch.py",
+            "python": "${workspaceFolder}/.venv/bin/python",
+            "console": "integratedTerminal",
+            "args": [
+                "--podping-prefix",
+                "pp"
+            ],
+            "env": {
+                "PYTHONPATH": "${workspaceFolder}/src"
+            },
+            "consoleName": "Watch"
+        },
+        {
             "name": "FastAPI (CLI serve)",
             "type": "debugpy",
             "request": "launch",
@@ -17,7 +33,8 @@
             "env": {
                 "PYTHONPATH": "${workspaceFolder}/src"
             },
-            "console": "integratedTerminal"
+            "console": "integratedTerminal",
+            "consoleName": "API Server"
         }
     ]
 }
