@@ -1,6 +1,6 @@
 from enum import StrEnum
 from time import time
-from typing import List
+from typing import Any, Dict, List
 
 from pydantic import BaseModel, Field
 
@@ -108,3 +108,18 @@ class HiveOperationId:
         if not self.startup:
             return f"{self.prefix}_{self.medium}_{str(self.reason).replace('_', '-')}"
         return f"{self.prefix}_startup"
+
+
+class HiveTrxID:
+    def __init__(self, trx_id: str = "", trx: Dict[str, Any] | None = None):
+        if trx is not None:
+            self.trx_id = trx.get("trx_id", "")
+        else:
+            self.trx_id = trx_id
+
+    def __str__(self) -> str:
+        return self.trx_id
+
+    @property
+    def link(self, hive_url: str = "https://hive.ausbit.dev/tx/") -> str:
+        return f"{hive_url}{self.trx_id}"

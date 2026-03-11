@@ -11,6 +11,8 @@ from pydantic import HttpUrl
 DEDUP_WINDOW_SECONDS = 180  # ignore duplicate URLs within this window
 PURGE_SENT_AFTER_SECONDS = 86400  # 24 hours
 
+
+
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS pending_podpings (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,

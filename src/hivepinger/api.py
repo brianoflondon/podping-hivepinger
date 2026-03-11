@@ -17,13 +17,17 @@ from hivepinger.podping_queue import PodpingQueue
 from models.podping import (
     CURRENT_PODPING_VERSION,
     HiveOperationId,
+    HiveTrxID,
     Medium,
     Podping,
     Reason,
     StartupPodping,
 )
 
-ICON = "🤖"
+log_filter = (
+    logging.debug if os.getenv("LOG_LEVEL", "").lower() in ("debug", "1", "true") else logging.info
+)
+
 DEFAULT_DB_PATH = "data/podping_queue.db"
 
 # per-reason processing intervals (seconds).  Acts as a simple priority system
@@ -102,9 +106,10 @@ def create_lifespan(
                 id=startup_op_id,
                 nobroadcast=no_broadcast,
             )
+            trx_id = HiveTrxID(trx=startup_trx)
             rpc_ulr = hive_client.rpc.url if hive_client and hive_client.rpc else "N/A"
             logging.info(
-                f"Sent startup podping with uuid={uuid_str}, trx_id={startup_trx.get('trx_id', 'N/A')} {rpc_ulr=} {no_broadcast=}"
+                f"Sent startup podping with uuid={uuid_str}, trx_id={trx_id.link} {rpc_ulr=} {no_broadcast=}"
             )
             app.state.fail_state = False
             app.state.fail_reason = ""
@@ -152,7 +157,7 @@ async def root(
     """
 
     try:
-        logging.debug(f"Received request with url={url}, reason={reason}, medium={medium}")
+        log_filter(f"Received {reason} {medium} {url}")
     except ValidationError as exc:
         raise HTTPException(status_code=422, detail=exc.errors())
 
@@ -160,9 +165,9 @@ async def root(
     queue: PodpingQueue = request.app.state.queue
     row_id = await queue.enqueue(url, medium.value, reason.value)
     if row_id == 0:
-        logging.info(f"Duplicate podping not enqueued: {url} reason={reason} medium={medium}")
+        logging.info(f"Duplicate podping not enqueued: {reason} {medium} {url}")
     else:
-        logging.info(f"Enqueued podping id={row_id}: {url}")
+        logging.info(f"Enqueued podping id={row_id}: {reason} {medium} {url}")
 
     return {"message": "queued", "reason": reason, "medium": medium, "url": url}
 
@@ -425,7 +430,7 @@ async def _serve(
                                     keys=[hive_posting_key],
                                     id=op_id,
                                 )
-                                trx_id = trx.get("trx_id", "N/A")
+                                trx_id = HiveTrxID(trx=trx)
                                 rpc_ulr = (
                                     hive_client.rpc.url
                                     if hive_client and hive_client.rpc
@@ -438,13 +443,13 @@ async def _serve(
                                     ""  # clear any previous failure reason on successful send
                                 )
                                 logging.info(
-                                    f"PODPING sent op={op_id} count={len(items)} {trx_id=} {rpc_ulr=}"
+                                    f"PODPING sent op={op_id} count={len(items)} {trx_id.link} {rpc_ulr=}"
                                 )
                                 for item in batch_items:
                                     await queue.mark_sent(
-                                        item["url"], item["medium"], item["reason"], trx_id
+                                        item["url"], item["medium"], item["reason"], str(trx_id)
                                     )
-                                    logging.info(f"{trx_id=} {item['url']} marked sent")
+                                    log_filter(f"{trx_id} {item['url']} marked sent")
                                 # successfully sent, now remove from pending
                                 ids_to_remove = [item["id"] for item in batch_items]
                                 await queue.remove_pending(ids_to_remove)
@@ -481,11 +486,17 @@ async def _serve(
 
 
 if __name__ == "__main__":
+    log_level = os.getenv("LOG_LEVEL", "info").lower()
+    if log_level in ("debug", "1", "true"):
+        level = logging.DEBUG
+    else:
+        level = logging.INFO
     logging.basicConfig(
-        level=logging.INFO,
+        level=level,
         format="%(asctime)s %(levelname)-8s %(module)-25s %(lineno)4d : %(message)s",
         datefmt="%m-%dT%H:%M:%S%z",
     )
+
     logging.info("Application startup: initializing resources")
     cli()
 else:
