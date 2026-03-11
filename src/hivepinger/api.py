@@ -6,7 +6,7 @@ from time import time
 
 import typer
 import uvicorn
-from fastapi import APIRouter, FastAPI, HTTPException, Query, Request
+from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.concurrency import asynccontextmanager
 from pydantic import HttpUrl, ValidationError
 
@@ -22,10 +22,6 @@ from models.podping import (
     Podping,
     Reason,
     StartupPodping,
-)
-
-log_filter = (
-    logging.debug if os.getenv("LOG_LEVEL", "").lower() in ("debug", "1", "true") else logging.info
 )
 
 DEFAULT_DB_PATH = "data/podping_queue.db"
@@ -109,7 +105,7 @@ def create_lifespan(
             trx_id = HiveTrxID(trx=startup_trx)
             rpc_ulr = hive_client.rpc.url if hive_client and hive_client.rpc else "N/A"
             logging.info(
-                f"Sent startup podping with uuid={uuid_str}, trx_id={trx_id.link} {rpc_ulr=} {no_broadcast=}"
+                f"Sent startup podping with uuid={uuid_str} {trx_id.link} {rpc_ulr=} {no_broadcast=}"
             )
             app.state.fail_state = False
             app.state.fail_reason = ""
@@ -139,37 +135,6 @@ app = None
 
 # command-line interface
 cli = typer.Typer()
-
-main_router = APIRouter(prefix="")
-
-
-@main_router.get("/")
-async def root(
-    request: Request,
-    url: HttpUrl = Query(..., description="URL to podping"),
-    reason: Reason = Query(Reason.UPDATE, description="Reason string"),
-    medium: Medium = Query(Medium.PODCAST, description="Medium string"),
-):
-    """Simple endpoint matching the request signature
-
-    Example:
-    GET https://podping.cloud/?url=https://feeds.example.org/livestream/rss&reason=live&medium=music
-    """
-
-    try:
-        log_filter(f"Received {reason} {medium} {url}")
-    except ValidationError as exc:
-        raise HTTPException(status_code=422, detail=exc.errors())
-
-    # enqueue for background processing — crash-safe after this commit
-    queue: PodpingQueue = request.app.state.queue
-    row_id = await queue.enqueue(url, medium.value, reason.value)
-    if row_id == 0:
-        logging.info(f"Duplicate podping not enqueued: {reason} {medium} {url}")
-    else:
-        logging.info(f"Enqueued podping id={row_id}: {reason} {medium} {url}")
-
-    return {"message": "queued", "reason": reason, "medium": medium, "url": url}
 
 
 def create_app(
@@ -245,7 +210,38 @@ def create_app(
             "pending_queue_length": pending_count,
         }
 
-    app.include_router(main_router, tags=["main"])
+    @app.get("/podping/")
+    @app.get("/")
+    async def root(
+        request: Request,
+        url: HttpUrl = Query(..., description="URL to podping"),
+        reason: Reason = Query(Reason.UPDATE, description="Reason string"),
+        medium: Medium = Query(Medium.PODCAST, description="Medium string"),
+    ):
+        """Simple endpoint matching the request signature
+
+        Example:
+        GET https://podping.cloud/?url=https://feeds.example.org/livestream/rss&reason=live&medium=music
+        """
+
+        try:
+            logging.debug(f"Received {reason} {medium} {url}")
+        except ValidationError as exc:
+            raise HTTPException(status_code=422, detail=exc.errors())
+
+        # enqueue for background processing — crash-safe after this commit
+        queue: PodpingQueue = request.app.state.queue
+        row_id = await queue.enqueue(url, medium.value, reason.value)
+        if row_id == 0:
+            logging.info(f"Duplicate podping not enqueued: {reason} {medium} {url}")
+        else:
+            logging.info(f"Enqueued podping id={row_id}: {reason} {medium} {url}")
+
+        if app.state.fail_state:
+            logging.error(f"Request received but service is in fail_state: {app.state.fail_reason}")
+            raise HTTPException(status_code=503, detail={"error": app.state.fail_reason})
+
+        return {"message": "queued", "reason": reason, "medium": medium, "url": url}
 
     return app
 
@@ -414,7 +410,7 @@ async def _serve(
                                 sessionId=session_id,
                             )
 
-                            op_id = str(
+                            json_id = str(
                                 HiveOperationId(
                                     prefix=podping_prefix,
                                     medium=Medium(medium),
@@ -428,7 +424,7 @@ async def _serve(
                                     send_account=hive_account_name,
                                     hive_client=hive_client,
                                     keys=[hive_posting_key],
-                                    id=op_id,
+                                    id=json_id,
                                 )
                                 trx_id = HiveTrxID(trx=trx)
                                 rpc_ulr = (
@@ -443,19 +439,19 @@ async def _serve(
                                     ""  # clear any previous failure reason on successful send
                                 )
                                 logging.info(
-                                    f"PODPING sent op={op_id} count={len(items)} {trx_id.link} {rpc_ulr=}"
+                                    f"PODPING sent json_id={json_id} count={len(items)} {trx_id.link} {rpc_ulr=}"
                                 )
                                 for item in batch_items:
                                     await queue.mark_sent(
                                         item["url"], item["medium"], item["reason"], str(trx_id)
                                     )
-                                    log_filter(f"{trx_id} {item['url']} marked sent")
+                                    logging.debug(f"{trx_id} {item['url']} marked sent")
                                 # successfully sent, now remove from pending
                                 ids_to_remove = [item["id"] for item in batch_items]
                                 await queue.remove_pending(ids_to_remove)
                             except CustomJsonSendError as ex:
                                 logging.error(
-                                    f"Failed to send podping batch op={op_id} count={len(items)}: {ex}"
+                                    f"Failed to send podping batch op={json_id} count={len(items)}: {ex}"
                                 )
                                 app.state.fail_state = True  # signal unhealthy status
                                 app.state.fail_reason = f"CustomJsonSendError: {ex}"
