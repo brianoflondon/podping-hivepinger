@@ -11,7 +11,7 @@ Usage:
 
 Or in Docker Compose:
     healthcheck:
-      test: ["CMD", "python", "healthcheck.py", "--host", "localhost", "--port", "6001"]
+      test: ["CMD", "python", "healthcheck.py", "--host", "localhost", "--port", "8000"]
 """
 
 import json
@@ -28,7 +28,7 @@ app = typer.Typer()
 def healthcheck(
     host: str = typer.Option("localhost", "--host", help="Host to check (default: localhost)"),
     path: str = typer.Option("/status", "--path", help="Path to check (default: /status)"),
-    port: int = typer.Option(1820, "--port", help="Port to check (default: 1820)"),
+    port: int = typer.Option(8000, "--port", help="Port to check (default: 8000)"),
     timeout: int = typer.Option(
         10, "--timeout", help="Timeout in seconds for the health check request"
     ),
@@ -37,7 +37,7 @@ def healthcheck(
         5.0, "--retry-delay", help="Delay in seconds between retries"
     ),
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Print the response body"),
-    pretty: bool = typer.Option(False, "--pretty", "-p", help="Pretty print JSON output"),
+    pretty: bool = typer.Option(True, "--pretty", "-p", help="Pretty print JSON output"),
 ):
     """
     Perform a health check by attempting to open the /status endpoint.
