@@ -26,6 +26,15 @@ Verbose logging is turned off but if you want a log of every podcast url which i
 
 The system runs a FastAPI server and you can see the health of the system at any time by visiting `http://<your-server-ip>:1820/health` or `http://<your-server-ip>:1820/status`.
 
+### Health‑check helper script
+
+A convenience script `health-check.sh` is included at the project root.
+
+* Run `./health-check.sh <container-name>` to dump the health‑check log for a named container.
+* Omit the argument and the script will prompt you to choose from the currently running containers.
+
+The script is written without any bash‑4‑specific features, so it works on both Ubuntu and the stock macOS shell (bash 3.2). It simply calls `docker inspect` and formats the `.State.Health` output with `jq` — nothing else is required.
+
 ### On Your Hosting Side
 
 Once the service is running on a local server within your infrastructure, your hosting system should send an HTTP GET request to the `/` endpoint with the required query parameters (`url`, `reason`, and `medium`) whenever a change happens in the feed of one of your customers. For example:
