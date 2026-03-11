@@ -1,5 +1,43 @@
 # Podping Hivepinger
 
+### Who is this for?
+
+This is for a Podcast Hosting Company which wants to broadcast podping updates without using anyone else's infrastructure (specifically the [Podping Cloud](https://podping.cloud) service run by [Podcasting 2.0](https://podcastindex.org/)).
+
+## How to Deploy
+
+The only extra thing you need is a Hive Account and a Posting Key to sign transactions with. This new account needs a little bit of Hive Power to cover transaction costs (resource credits). If you have a BTC Lightning wallet, you can use [Signup with v4v.app](https://v4v.app/signup) to create a Hive account and fund it with a small amount of Hive Power.
+
+If you contact me, [Brian of London](mailto:gethive@podping.org), I will help set you up with an account.
+
+Regardless of whether you need help with the Hive account, please let me know and I'll help make sure your account has enough resource credits (Hive Power) to always work.
+
+### Once you have Hive credentials, you can deploy the service with these steps:
+
+1. Clone the repo and navigate to the project directory.
+2. Copy the `.env.sample` file to `.env` and fill in your Hive account name and Posting Key.
+3. Run Docker Compose: `docker compose up -d`
+4. Watch the logs with `docker compose logs -f` to see the service start up and process incoming podpings.
+
+
+There are various options which are documented in the `.env.sample` file but the defaults are probably what you need.
+
+Verbose logging is turned off but if you want a log of every podcast url which is sent to the service, you can set `VERBOSE=true` in the `.env` file.
+
+The system runs a FastAPI server and you can see the health of the system at any time by visiting `http://<your-server-ip>:1820/health` or `http://<your-server-ip>:1820/status`.
+
+### On Your Hosting Side
+
+Once the service is running on a local server within your infrastructure, your hosting system should send an HTTP GET request to the `/` endpoint with the required query parameters (`url`, `reason`, and `medium`) whenever a change happens in the feed of one of your customers. For example:
+
+```bash
+curl -X 'GET' \
+  'http://<local-ip-address>:1820/podping/?url=http%3A%2F%2Fexample.com%2Fcustomer.rss&reason=update&medium=podcast' \
+  -H 'accept: application/json'
+```
+
+## About the project
+
 A FastAPI service that receives podcast feed update notifications (podpings) via HTTP, queues them in a crash-resilient SQLite database, deduplicates them, and (eventually) broadcasts them to the Hive blockchain.
 
 Built with **uv** for package management, **Typer** for the CLI, and **aiosqlite** for async disk-backed persistence.

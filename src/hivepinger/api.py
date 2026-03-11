@@ -275,7 +275,7 @@ def create_fast_api_app(
 @cli.command()
 def serve(
     host: str = typer.Option("0.0.0.0", help="Host to run the server on"),
-    port: int = typer.Option(1820, help="Port to run the server on"),
+    port: int = typer.Option(8000, help="Port to run the server on"),
     workers: int = typer.Option(1, help="Number of worker processes for handling requests"),
     hive_account_name: str = typer.Option(
         None, help="Hive account name for signing transactions (optional)"
