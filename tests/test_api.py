@@ -145,7 +145,12 @@ def test_lifespan_sets_shutdown_event(tmp_path):
 
 
 def test_health_priority_over_queue(tmp_path):
-    """health() should return fail_reason even if the queue is missing or broken."""
+    """health() should report queue errors when the queue is missing or broken.
+
+    The service records a failure reason but queue accessibility takes
+    precedence; missing or broken queue results in a 503 with a simple
+    "Queue inaccessible" message regardless of the fail_state.
+    """
 
     from hivepinger import api
 
@@ -162,8 +167,7 @@ def test_health_priority_over_queue(tmp_path):
     client = TestClient(app, raise_server_exceptions=False)
     response = client.get("/health")
     assert response.status_code == 503
-    body = response.json()
-    assert body == {"detail": {"error": "something bad"}}
+    assert response.json()["detail"] == "Queue inaccessible"
 
 
 def test_health_handles_queue_error(tmp_path, monkeypatch):

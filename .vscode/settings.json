@@ -13,8 +13,13 @@
         "statusBar.noFolderForeground": "#F6FAFD"
     },
     "cSpell.words": [
+        "aiosqlite",
         "Dedup",
         "hivepinger",
+        "lastrowid",
         "pplt"
+    ],
+    "python.analysis.extraPaths": [
+        "./src"
     ]
 }

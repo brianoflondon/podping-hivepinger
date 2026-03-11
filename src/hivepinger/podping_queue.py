@@ -129,7 +129,7 @@ class PodpingQueue:
         ) as cur:
             row_id = cur.lastrowid
         await self._db.commit()
-        return row_id
+        return row_id or 0
 
     async def dequeue_batch(
         self, medium: str | None = None, reason: str | None = None
@@ -167,8 +167,6 @@ class PodpingQueue:
         deduplication, mirroring the old behaviour.
         """
         assert self._db is not None
-
-        now = time.time()
 
         # build query with optional filters
         base: str = "SELECT id, url, medium, reason, received_at FROM pending_podpings"
@@ -273,6 +271,7 @@ class PodpingQueue:
         """
         if self._db is None:
             return None
+        params: tuple[str, ...] = ()
         if reason is not None:
             query = "SELECT MIN(received_at) FROM pending_podpings WHERE reason = ?"
             params = (reason,)

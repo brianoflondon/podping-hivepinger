@@ -3,6 +3,7 @@ import logging
 import os
 import uuid
 from time import time
+from typing import Any, AsyncContextManager, Callable, List
 
 import typer
 import uvicorn
@@ -47,7 +48,7 @@ def create_lifespan(
     no_broadcast: bool,
     podping_prefix: str,
     session_id: int,
-):
+) -> Callable[[FastAPI], AsyncContextManager[Any]]:
     """Factory function to create lifespan with queue init/teardown.
 
     The returned context manager is executed during FastAPI startup and
@@ -83,6 +84,9 @@ def create_lifespan(
             uuid_str = str(uuid.uuid4())
             hive_client = get_hive_client(keys=[hive_posting_key], nobroadcast=no_broadcast)
             rpc_url = hive_client.rpc.url if hive_client and hive_client.rpc else "N/A"
+            if not rpc_url:
+                rpc_url = "N/A"
+                logging.warning("Hive client RPC URL is not available; using 'N/A' in logs")
             startup_podping = StartupPodping(
                 server_account=hive_account_name,
                 message="Podping HivePinger startup complete",
@@ -184,13 +188,20 @@ def create_fast_api_app(
 
     @fast_api_app.get("/health")
     @fast_api_app.get("/status")
-    async def health(list_iris: bool = False):
+    async def health(list_iris: bool = False) -> dict[str, Any]:
         # check length of queue to ensure DB is responsive; we don't want to return 200 if the queue is stuck
         # if the service has already recorded a failure reason, return that
         # immediately – we don't even need the queue for this.
-        if getattr(fast_api_app.state, "fail_state", False):
-            logging.error("Health check: fail_state is True, returning unhealthy status")
-            raise HTTPException(status_code=503, detail={"error": fast_api_app.state.fail_reason})
+
+        health = {
+            "message": "Welcome to Podping HivePinger API",
+            "version": __version__,
+            "status": "OK",
+            "session_id": session_id,
+            "podping_prefix": podping_prefix,
+            "no_broadcast": no_broadcast,
+            "documentation": "/docs",
+        }
 
         queue: PodpingQueue  # type: ignore
         pending_iris: List[str] = []
@@ -202,19 +213,23 @@ def create_fast_api_app(
                 pending_iris = [item["url"] for item in pending_items]
         except Exception as exc:
             logging.error(f"Health check failed: unable to access queue: {exc}")
+            pending_count = 0
+            pending_iris = []
             raise HTTPException(status_code=503, detail="Queue inaccessible")
+
+        health["pending_queue_length"] = pending_count
+        health["pending_iris"] = pending_iris
+
+        if getattr(fast_api_app.state, "fail_state", False):
+            logging.error("Health check: fail_state is True, returning unhealthy status")
+            raise HTTPException(
+                status_code=503,
+                detail={"error": fast_api_app.state.fail_reason, "health": health},
+            )
 
         if pending_count > 0:
             logging.info(f"Health check: {pending_count} pending items in queue")
-        return {
-            "message": "Welcome to Podping HivePinger API",
-            "version": __version__,
-            "status": "OK",
-            "session_id": session_id,
-            "documentation": "/docs",
-            "pending_queue_length": pending_count,
-            "pending_iris": pending_iris,
-        }
+        return health
 
     @fast_api_app.get("/podping/")
     @fast_api_app.get("/")
@@ -223,7 +238,7 @@ def create_fast_api_app(
         url: HttpUrl = Query(..., description="URL to podping"),
         reason: Reason = Query(Reason.UPDATE, description="Reason string"),
         medium: Medium = Query(Medium.PODCAST, description="Medium string"),
-    ):
+    ) -> dict[str, Any]:
         """Simple endpoint matching the request signature
 
         Example:
@@ -277,7 +292,7 @@ def serve(
         "-v",
         help="Enable verbose logging to see every received and sent podping url in the logs",
     ),
-):
+) -> None:
     """Run the FastAPI server and any additional async tasks."""
     if not hive_account_name:
         # get the name from OS .env
@@ -326,7 +341,7 @@ async def _serve(
     no_broadcast: bool = False,
     podping_prefix: str = "pp",
     verbose: bool = False,
-):
+) -> None:
     session_id = uuid.uuid4().int & (1 << 64) - 1
     fast_api_app = create_fast_api_app(
         session_id=session_id,
@@ -521,6 +536,8 @@ if __name__ == "__main__":
     log_level = os.getenv("LOG_LEVEL", "info").lower()
     if log_level in ("debug", "1", "true"):
         level = logging.DEBUG
+    elif log_level in ("warning", "2", "warn"):
+        level = logging.WARNING
     else:
         level = logging.INFO
     logging.basicConfig(
