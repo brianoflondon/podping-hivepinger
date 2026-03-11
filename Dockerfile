@@ -38,7 +38,7 @@ ENV PYTHONPATH="/hivepinger/src"
 # ``data`` relative to the working directory (/hivepinger)
 RUN mkdir -p /hivepinger/data
 
-EXPOSE 1820
+EXPOSE 8000
 
 # run the API script; any arguments (host/port/prefix, etc.)
 # are supplied by the caller (docker-compose or `docker run`).
