@@ -67,11 +67,23 @@ class PodpingQueue:
     async def enqueue(self, url: HttpUrl, medium: str, reason: str) -> int:
         """Insert a URL into the pending queue.
 
-        Before inserting we perform the RC-style dedup check against the
-        ``sent_podpings`` table.  If the URL was sent within the dedup window
-        we log and return ``0`` to indicate nothing was added.  This ensures the
-        expensive query is done once at enqueue time instead of on every
-        dequeue/peek that touches the backlog.
+        Before inserting we perform deduplication in two places:
+
+        * ``sent_podpings`` – if the URL was broadcast within the recent
+          ``DEDUP_WINDOW_SECONDS`` we return ``0`` and do not enqueue another
+          copy.  This mirrors the previous behaviour and avoids firing the
+          same podping too frequently.
+        * ``pending_podpings`` – if the URL already exists in the pending
+          table we also return ``0``.  This protects against clients queuing
+          the same podcast multiple times while the first request is still
+          waiting to be sent.  Unlike the sent check there is no time window –
+          once an item is queued another identical request is considered a
+          duplicate until the original row is removed.
+
+        Returning ``0`` is how the caller (and the API layer) knows a duplicate
+        was detected.  Performing these checks here keeps the expensive
+        database work out of the dequeue/peek paths and makes the behaviour
+        crash-safe.
         """
         assert self._db is not None
         url_str = str(url)
@@ -86,6 +98,20 @@ class PodpingQueue:
             recently = await cur.fetchone()
         if recently:
             logging.debug(f"Dedup skip: {url_str} was sent within last {DEDUP_WINDOW_SECONDS}s")
+            return 0
+
+        # also avoid enqueueing a URL that's already pending. this check has no
+        # time window – once something is queued we don't need another copy
+        # until the first one is either sent or removed. doing this here keeps
+        # the behaviour consistent with the log messages produced by the API
+        # layer when ``enqueue`` returns 0.
+        async with self._db.execute(
+            "SELECT 1 FROM pending_podpings WHERE url = ? LIMIT 1",
+            (url_str,),
+        ) as cur:
+            already = await cur.fetchone()
+        if already:
+            logging.debug(f"Dedup skip: {url_str} already pending")
             return 0
 
         async with self._db.execute(
@@ -209,8 +235,14 @@ class PodpingQueue:
         await self._db.commit()
 
     async def purge_old_sent(self):
-        """Remove sent records older than 24 hours."""
-        assert self._db is not None
+        """Remove sent records older than 24 hours.
+
+        If the queue has already been closed, simply do nothing.  The
+        background loop may call this during shutdown and should not raise
+        assertions in that case.
+        """
+        if self._db is None:
+            return
         cutoff = time.time() - PURGE_SENT_AFTER_SECONDS
         await self._db.execute("DELETE FROM sent_podpings WHERE sent_at < ?", (cutoff,))
         await self._db.commit()
@@ -223,12 +255,12 @@ class PodpingQueue:
         """Return the oldest ``received_at`` timestamp for pending rows.
 
         If ``reason`` is provided, only rows matching that reason are
-        considered.  Returns ``None`` when there are no pending items.
-        This allows callers (e.g. the processing loop in :mod:`api`) to decide
-        whether the oldest entry has been sitting around long enough to send a
-        batch.
+        considered.  Returns ``None`` when there are no pending items.  If the
+        queue has already been closed (``_db is None``), ``None`` is returned
+        rather than asserting – callers should treat this as "no work".
         """
-        assert self._db is not None
+        if self._db is None:
+            return None
         if reason is not None:
             query = "SELECT MIN(received_at) FROM pending_podpings WHERE reason = ?"
             params = (reason,)
@@ -236,8 +268,12 @@ class PodpingQueue:
             query = "SELECT MIN(received_at) FROM pending_podpings"
             params = ()
 
-        async with self._db.execute(query, params) as cur:
-            row = await cur.fetchone()
+        try:
+            async with self._db.execute(query, params) as cur:
+                row = await cur.fetchone()
+        except Exception:
+            # database is gone or closed; behave as if there are no pending rows
+            return None
         if not row or row[0] is None:
             return None
         return row[0]
@@ -249,6 +285,9 @@ class PodpingQueue:
         timestamp of the oldest pending row and ensure it has been in the queue
         for at least ``interval`` seconds.  It keeps the batching semantics local
         to the queue layer so that the API's background loop remains clean.
+
+        If the database has been closed the helper returns ``False`` so the loop
+        can exit gracefully during shutdown.
         """
         oldest = await self.oldest_pending(reason)
         if oldest is None:

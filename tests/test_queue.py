@@ -60,6 +60,23 @@ async def test_dedup_blocks_recently_sent(queue: PodpingQueue):
 
 
 @pytest.mark.asyncio
+async def test_dedup_blocks_pending(queue: PodpingQueue):
+    """Verify that an already-pending URL is rejected when enqueued again."""
+    url = "https://example.com/pending.xml"
+
+    first = await queue.enqueue(url, "podcast", "update")
+    assert first != 0
+
+    second = await queue.enqueue(url, "podcast", "update")
+    assert second == 0
+
+    # only one row should be in the queue
+    batch = await queue.dequeue_batch()
+    assert len(batch) == 1
+    assert batch[0]["url"] == url
+
+
+@pytest.mark.asyncio
 async def test_dedup_allows_after_window(queue: PodpingQueue, monkeypatch):
     url = "https://example.com/old.xml"
 
@@ -156,6 +173,13 @@ async def test_peek_and_remove(queue: PodpingQueue):
     rem = await queue.dequeue_batch()
     assert len(rem) == 1
     assert rem[0]["id"] == ids3[1]
+
+
+@pytest.mark.asyncio
+async def test_purge_does_nothing_after_close(queue: PodpingQueue):
+    # close the queue and then call purge_old_sent; should not raise.
+    await queue.close()
+    await queue.purge_old_sent()
 
 
 @pytest.mark.asyncio

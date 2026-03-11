@@ -51,6 +51,13 @@ def create_lifespan(
     """Factory function to create lifespan with queue init/teardown.
 
     The returned context manager is executed during FastAPI startup and
+    shutdown.  We also attach an ``asyncio.Event`` to ``app.state.shutdown_event``
+    which is triggered when the lifespan closes; the background loop listens
+    for this event to exit promptly during shutdown.
+    """
+    """Factory function to create lifespan with queue init/teardown.
+
+    The returned context manager is executed during FastAPI startup and
     shutdown.  We also send the startup podping here (instead of using the
     old ``@app.on_event("startup")`` decorator) so that the state we mutate
     (`app.state.fail_*`) is set while the lifespan context is active.
@@ -66,6 +73,8 @@ def create_lifespan(
             False  # used to signal unhealthy status in case of critical failures
         )
         app.state.fail_reason = ""
+        # create an event that signals shutdown; background loop can watch it
+        app.state.shutdown_event = asyncio.Event()
 
         # attempt to send startup podping while the app is still coming up;
         # any failure simply marks the service unhealthy but does not abort the
@@ -111,6 +120,11 @@ def create_lifespan(
         yield
         logging.info("Application shutdown: cleaning up resources")
         await queue.close()
+        # signal any listeners that shutdown has begun
+        try:
+            app.state.shutdown_event.set()
+        except Exception:
+            pass
 
     return lifespan
 
@@ -145,7 +159,10 @@ async def root(
     # enqueue for background processing — crash-safe after this commit
     queue: PodpingQueue = request.app.state.queue
     row_id = await queue.enqueue(url, medium.value, reason.value)
-    logging.debug(f"Enqueued podping id={row_id}: {url}")
+    if row_id == 0:
+        logging.info(f"Duplicate podping not enqueued: {url} reason={reason} medium={medium}")
+    else:
+        logging.info(f"Enqueued podping id={row_id}: {url}")
 
     return {"message": "queued", "reason": reason, "medium": medium, "url": url}
 
@@ -338,6 +355,16 @@ async def _serve(
             last_client_creation = time()
 
         while True:
+            # if the queue has been closed (shutdown) bail out early
+            if getattr(queue, "_db", None) is None:
+                logging.info("background_loop: queue closed, exiting")
+                break
+
+            # also respect explicit shutdown event if set
+            if hasattr(app.state, "shutdown_event") and app.state.shutdown_event.is_set():
+                logging.info("background_loop: shutdown event set, exiting")
+                break
+
             now = time()
 
             # recreate client periodically
@@ -417,6 +444,7 @@ async def _serve(
                                     await queue.mark_sent(
                                         item["url"], item["medium"], item["reason"], trx_id
                                     )
+                                    logging.info(f"{item['url']} marked sent with trx_id={trx_id}")
                                 # successfully sent, now remove from pending
                                 ids_to_remove = [item["id"] for item in batch_items]
                                 await queue.remove_pending(ids_to_remove)
@@ -449,6 +477,7 @@ async def _serve(
 
     # run server and background loop concurrently
     await asyncio.gather(server.serve(), background_loop())
+    print("Server shutdown complete")
 
 
 if __name__ == "__main__":

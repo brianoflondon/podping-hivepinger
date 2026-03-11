@@ -89,6 +89,42 @@ def test_startup_event_sets_fail_state(monkeypatch, tmp_path):
     assert "simulated failure" in app.state.fail_reason
 
 
+def test_lifespan_sets_shutdown_event(tmp_path):
+    from hivepinger import api
+
+    db_path = str(tmp_path / "test_api.db")
+
+    # stub hive client and send so startup ping succeeds
+    class DummyClient:
+        def __init__(self):
+            self.rpc = type("R", (), {"url": "http://node"})()
+
+    api.get_hive_client = lambda *args, **kwargs: DummyClient()  # type: ignore
+
+    async def noop_send(*args, **kwargs):
+        return {}
+
+    api.send_custom_json = noop_send  # type: ignore
+
+    app = api.create_app(db_path=db_path)
+
+    # the event is only attached when the lifespan context begins
+    async def run_ctx():
+        async with app.router.lifespan_context(app):
+            assert hasattr(app.state, "shutdown_event")
+            ev = app.state.shutdown_event
+            assert not ev.is_set()
+        # after exiting context the event should be set
+        assert ev.is_set()
+
+    import asyncio
+
+    asyncio.run(run_ctx())
+
+    # ensure event survives beyond context
+    assert app.state.shutdown_event.is_set()
+
+
 def test_health_priority_over_queue(tmp_path):
     """health() should return fail_reason even if the queue is missing or broken."""
 
