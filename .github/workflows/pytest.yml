@@ -1,0 +1,67 @@
+name: Pytest Python
+
+on:
+  push:
+    branches:
+      - main
+      - develop
+    tags:
+      - "v*"
+  pull_request:
+    branches:
+      - main
+      - develop
+    paths-ignore:
+      - "**.md"
+      - ".gitignore"
+      - "LICENSE"
+      - ".env*"
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: [3.13]          # or 3.12 if you want to match your other project
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      # Install UV
+      - name: Install UV
+        run: |
+          curl -LsSf https://astral.sh/uv/install.sh | sh
+          echo "$HOME/.cargo/bin" >> $GITHUB_PATH
+
+      # Cache virtual environment
+      - name: Cache UV virtual environment
+        id: cache-venv
+        uses: actions/cache@v4
+        with:
+          path: .venv
+          key: uv-venv-${{ runner.os }}-${{ hashFiles('pyproject.toml') }}-${{ hashFiles('uv.lock') }}
+
+      # Set up virtual environment and sync dependencies
+      - name: Set up UV environment and install dependencies
+        if: steps.cache-venv.outputs.cache-hit != 'true'
+        run: |
+          uv venv --python ${{ matrix.python-version }}
+          uv sync --group dev
+
+      # Ensure UV is available and sync if cache is hit
+      - name: Sync UV dependencies (post-cache)
+        run: |
+          uv sync --group dev
+
+      # optional diagnostics
+      - name: Check UV version
+        run: uv --version
+      - name: List installed packages
+        run: uv pip list
+
+      # finally, run the tests inside the UV-managed virtualenv
+      - name: Run tests
+        run: uv run pytest

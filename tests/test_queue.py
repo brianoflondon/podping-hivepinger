@@ -1,0 +1,274 @@
+"""Tests for PodpingQueue — enqueue, dedup, mark_sent, purge."""
+
+import time
+
+import pytest
+import pytest_asyncio
+
+from hivepinger.podping_queue import DEDUP_WINDOW_SECONDS, PURGE_SENT_AFTER_SECONDS, PodpingQueue
+
+
+@pytest_asyncio.fixture
+async def queue(tmp_path):
+    db_path = str(tmp_path / "test_queue.db")
+    q = PodpingQueue(db_path)
+    await q.open()
+    yield q
+    await q.close()
+
+
+@pytest.mark.asyncio
+async def test_enqueue_and_dequeue(queue: PodpingQueue):
+    row_id = await queue.enqueue("https://example.com/feed.xml", "podcast", "update")
+    assert row_id is not None
+
+    batch = await queue.dequeue_batch()
+    assert len(batch) == 1
+    assert batch[0]["url"] == "https://example.com/feed.xml"
+    assert batch[0]["medium"] == "podcast"
+    assert batch[0]["reason"] == "update"
+
+    # pending should now be empty
+    batch2 = await queue.dequeue_batch()
+    assert len(batch2) == 0
+
+    # enqueue two different reasons and ensure filtering works
+    await queue.enqueue("https://example.org/one", "podcast", "update")
+    await queue.enqueue("https://example.org/two", "podcast", "live")
+    upd = await queue.dequeue_batch(reason="update")
+    assert len(upd) == 1 and upd[0]["reason"] == "update"
+    live = await queue.dequeue_batch(reason="live")
+    assert len(live) == 1 and live[0]["reason"] == "live"
+
+
+@pytest.mark.asyncio
+async def test_dedup_blocks_recently_sent(queue: PodpingQueue):
+    url = "https://example.com/live.xml"
+    await queue.enqueue(url, "music", "live")
+
+    # simulate having sent it just now
+    await queue.mark_sent(url, "music", "live", "abc123")
+
+    # enqueue the same tuple again – dedup should fire
+    row = await queue.enqueue(url, "music", "live")
+    assert row == 0
+
+    # queue should remain unchanged
+    batch = await queue.dequeue_batch()
+    assert len(batch) == 1
+    assert batch[0]["url"] == url
+
+    # however, changing the reason or medium should allow a new row
+    row2 = await queue.enqueue(url, "music", "liveEnd")
+    assert row2 != 0
+    row3 = await queue.enqueue(url, "video", "live")
+    assert row3 != 0
+
+    # after the earlier dequeue the queue is empty; only the two new rows
+    # should be present now.
+    batch2 = await queue.dequeue_batch()
+    assert len(batch2) == 2
+    reasons = {item["reason"] for item in batch2}
+    mediums = {item["medium"] for item in batch2}
+    assert "liveEnd" in reasons and "video" in mediums
+
+
+@pytest.mark.asyncio
+async def test_dedup_blocks_pending(queue: PodpingQueue):
+    """Verify that an already-pending URL is rejected when enqueued again."""
+    url = "https://example.com/pending.xml"
+
+    first = await queue.enqueue(url, "podcast", "update")
+    assert first != 0
+
+    second = await queue.enqueue(url, "podcast", "update")
+    assert second == 0
+
+    # a different reason or medium should be allowed
+    third = await queue.enqueue(url, "podcast", "live")
+    assert third != 0
+    fourth = await queue.enqueue(url, "audio", "update")
+    assert fourth != 0
+
+    # queue should contain three entries now
+    batch = await queue.dequeue_batch()
+    assert len(batch) == 3
+    assert all(item["url"] == url for item in batch)
+
+
+@pytest.mark.asyncio
+async def test_dedup_allows_after_window(queue: PodpingQueue, monkeypatch):
+    url = "https://example.com/old.xml"
+
+    # mark as sent with a timestamp older than the dedup window
+    old_time = time.time() - DEDUP_WINDOW_SECONDS - 10
+    await queue._db.execute(
+        "INSERT INTO sent_podpings (url, medium, reason, trx_id, sent_at) VALUES (?, ?, ?, ?, ?)",
+        (url, "podcast", "update", "old_trx", old_time),
+    )
+    await queue._db.commit()
+
+    await queue.enqueue(url, "podcast", "update")
+    batch = await queue.dequeue_batch()
+    assert len(batch) == 1
+    assert batch[0]["url"] == url
+
+
+@pytest.mark.asyncio
+async def test_mark_sent_records_trx(queue: PodpingQueue):
+    await queue.mark_sent("https://example.com/feed.xml", "podcast", "update", "deadbeef1234")
+
+    async with queue._db.execute(
+        "SELECT trx_id FROM sent_podpings WHERE url = ?",
+        ("https://example.com/feed.xml",),
+    ) as cur:
+        row = await cur.fetchone()
+    assert row is not None
+    assert row[0] == "deadbeef1234"
+
+
+@pytest.mark.asyncio
+async def test_purge_old_sent(queue: PodpingQueue):
+    old_time = time.time() - PURGE_SENT_AFTER_SECONDS - 10
+    recent_time = time.time()
+
+    await queue._db.execute(
+        "INSERT INTO sent_podpings (url, medium, reason, trx_id, sent_at) VALUES (?, ?, ?, ?, ?)",
+        ("https://old.example.com", "podcast", "update", "old", old_time),
+    )
+    await queue._db.execute(
+        "INSERT INTO sent_podpings (url, medium, reason, trx_id, sent_at) VALUES (?, ?, ?, ?, ?)",
+        ("https://new.example.com", "podcast", "update", "new", recent_time),
+    )
+    await queue._db.commit()
+
+    await queue.purge_old_sent()
+
+    async with queue._db.execute("SELECT COUNT(*) FROM sent_podpings") as cur:
+        row = await cur.fetchone()
+    assert row[0] == 1  # only the recent one remains
+
+
+@pytest.mark.asyncio
+async def test_crash_recovery(tmp_path):
+    """Pending items survive close+reopen (simulating a crash)."""
+    db_path = str(tmp_path / "crash_test.db")
+
+    q1 = PodpingQueue(db_path)
+    await q1.open()
+    await q1.enqueue("https://example.com/survive.xml", "music", "live")
+    await q1.close()
+
+    # reopen — the row should still be pending
+    q2 = PodpingQueue(db_path)
+    await q2.open()
+    batch = await q2.dequeue_batch()
+    assert len(batch) == 1
+    assert batch[0]["url"] == "https://example.com/survive.xml"
+    await q2.close()
+
+
+@pytest.mark.asyncio
+async def test_peek_and_remove(queue: PodpingQueue):
+    # pushing two items
+    id1 = await queue.enqueue("https://peek/1", "podcast", "update")
+    id2 = await queue.enqueue("https://peek/2", "podcast", "update")
+
+    # peek without deleting
+    batch, ids = await queue.peek_batch()
+    assert len(batch) == 2
+    assert set(ids) == {id1, id2}
+
+    # queue still contains the items
+    batch2 = await queue.dequeue_batch()
+    assert len(batch2) == 2
+
+    # reinstate for remove_pending test
+    await queue.enqueue("https://peek/3", "podcast", "update")
+    await queue.enqueue("https://peek/4", "podcast", "update")
+    batch3, ids3 = await queue.peek_batch()
+    assert len(batch3) == 2
+    # delete only one of them
+    await queue.remove_pending([ids3[0]])
+    rem = await queue.dequeue_batch()
+    assert len(rem) == 1
+    assert rem[0]["id"] == ids3[1]
+
+
+@pytest.mark.asyncio
+async def test_purge_does_nothing_after_close(queue: PodpingQueue):
+    # close the queue and then call purge_old_sent; should not raise.
+    await queue.close()
+    await queue.purge_old_sent()
+
+
+@pytest.mark.asyncio
+async def test_multiple_urls_partial_dedup(queue: PodpingQueue):
+    """When some URLs are dupes and some are new, only new ones are returned."""
+    await queue.mark_sent("https://example.com/dup.xml", "podcast", "update", "trx1")
+
+    # dup entry has same tuple as the sent record and should be dropped
+    await queue.enqueue("https://example.com/dup.xml", "podcast", "update")
+    await queue.enqueue("https://example.com/new.xml", "music", "live")
+
+    batch = await queue.dequeue_batch()
+    urls = [item["url"] for item in batch]
+    assert "https://example.com/new.xml" in urls
+    assert "https://example.com/dup.xml" not in urls
+
+    # pending table should be fully drained
+    batch2 = await queue.dequeue_batch()
+    assert len(batch2) == 0
+
+    # verify filtering still works after a partial-dedup operation
+    await queue.enqueue("https://example.com/a", "podcast", "update")
+    await queue.enqueue("https://example.com/b", "podcast", "live")
+
+    upd = await queue.dequeue_batch(reason="update")
+    assert len(upd) == 1 and upd[0]["url"].endswith("/a")
+    live = await queue.dequeue_batch(reason="live")
+    assert len(live) == 1 and live[0]["url"].endswith("/b")
+
+
+@pytest.mark.asyncio
+async def test_peek_batch_distinguishes_reasons(queue: PodpingQueue):
+    """Items with identical URLs but different reasons/mediums should both
+    be visible when peeking; dedup filtering must use the full tuple."""
+    url = "https://example.com/dup.xml"
+    await queue.enqueue(url, "podcast", "live")
+    await queue.enqueue(url, "podcast", "liveEnd")
+    batch, ids = await queue.peek_batch()
+    assert len(batch) == 2
+    reasons = {item["reason"] for item in batch}
+    assert reasons == {"live", "liveEnd"}
+
+
+@pytest.mark.asyncio
+async def test_oldest_pending_and_ready(queue: PodpingQueue, monkeypatch):
+    """Verify that ``oldest_pending`` returns the correct timestamp and that
+    ``ready_to_send`` respects the supplied interval."""
+    # start with an empty queue
+    assert await queue.oldest_pending() is None
+    # enqueue a couple of items at roughly the same time
+    t0 = time.time()
+    await queue.enqueue("https://foo/1", "podcast", "update")
+    await queue.enqueue("https://foo/2", "podcast", "update")
+
+    oldest = await queue.oldest_pending("update")
+    assert oldest is not None and abs(oldest - t0) < 1.0
+
+    # if we pretend only a few seconds have passed, the interval check fails
+    # patch the module's time() so that ready_to_send uses the fake clock
+    import hivepinger.podping_queue as pq
+
+    monkeypatch.setattr(pq.time, "time", lambda: t0 + 5)
+    assert not await queue.ready_to_send("update", interval=10)
+
+    # after the interval has elapsed it should become true
+    monkeypatch.setattr(pq.time, "time", lambda: t0 + 11)
+    assert await queue.ready_to_send("update", interval=10)
+
+    # once ready, a dequeue should return all of the items we pushed earlier
+    batch = await queue.dequeue_batch(reason="update")
+    urls = {item["url"] for item in batch}
+    assert urls == {"https://foo/1", "https://foo/2"}

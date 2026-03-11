@@ -1,0 +1,21 @@
+services:
+  podping-hivepinger:
+    image: brianoflondon/podping-hivepinger:latest
+    container_name: hivepinger
+    ports:
+      - "${BIND_HOST:-127.0.0.1}:${API_PORT:-1820}:8000"
+    volumes:
+      # persist the SQLite queue database on the host; the application writes
+      # to /app/data by default, so mirror that path rather than /data
+      - ./data:/app/data
+    env_file:
+      - .env
+    command: []
+    # Healthcheck configuration to monitor the API endpoint; adjust the command and parameters as needed
+    healthcheck:
+      test: ["CMD", "python", "src/health_check.py", "--host", "localhost", "--port", "8000" , "--pretty"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    restart: unless-stopped

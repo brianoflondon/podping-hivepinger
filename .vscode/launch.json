@@ -1,0 +1,40 @@
+{
+    "configurations": [
+        {
+            "name": "Watch",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/src/hivewatcher/watch.py",
+            "python": "${workspaceFolder}/.venv/bin/python",
+            "console": "integratedTerminal",
+            "args": [
+                "--podping-prefix",
+                "pp"
+            ],
+            "env": {
+                "PYTHONPATH": "${workspaceFolder}/src"
+            },
+            "consoleName": "Watch"
+        },
+        {
+            "name": "FastAPI (CLI serve)",
+            "type": "debugpy",
+            "request": "launch",
+            "python": "${workspaceFolder}/.venv/bin/python",
+            "program": "${workspaceFolder}/src/hivepinger/api.py",
+            "args": [
+                "--host",
+                "0.0.0.0",
+                "--port",
+                "1820",
+                "--podping-prefix",
+                "pplt"
+            ],
+            "env": {
+                "PYTHONPATH": "${workspaceFolder}/src"
+            },
+            "console": "integratedTerminal",
+            "consoleName": "API Server"
+        }
+    ]
+}
