@@ -103,9 +103,9 @@ def create_lifespan(
                 nobroadcast=no_broadcast,
             )
             trx_id = HiveTrxID(trx=startup_trx)
-            rpc_ulr = hive_client.rpc.url if hive_client and hive_client.rpc else "N/A"
+            rpc_url = hive_client.rpc.url if hive_client and hive_client.rpc else "N/A"
             logging.info(
-                f"Sent startup podping with uuid={uuid_str} {trx_id.link} {rpc_ulr=} {no_broadcast=}"
+                f"Sent startup podping with uuid={uuid_str} {trx_id.link} {rpc_url=} {no_broadcast=}"
             )
             app.state.fail_state = False
             app.state.fail_reason = ""
@@ -137,13 +137,14 @@ app = None
 cli = typer.Typer()
 
 
-def create_app(
+def create_fast_api_app(
     db_path: str = DEFAULT_DB_PATH,
     session_id: int | None = None,
     hive_account_name: str = "",
     hive_posting_key: str = "",
     no_broadcast: bool = False,
     podping_prefix: str = "pp",
+    verbose: bool = False,
 ) -> FastAPI:
     """Create FastAPI app with the specified configuration.
 
@@ -153,7 +154,7 @@ def create_app(
     """
     if not session_id:
         session_id = uuid.uuid4().int & (1 << 64) - 1
-    app = FastAPI(
+    fast_api_app = FastAPI(
         lifespan=create_lifespan(
             db_path,
             hive_account_name,
@@ -170,7 +171,7 @@ def create_app(
 
     # Add proxy middleware to trust headers from reverse proxy
     # This allows FastAPI to correctly detect HTTPS when behind nginx proxy
-    @app.middleware("http")
+    @fast_api_app.middleware("http")
     async def proxy_middleware(request: Request, call_next):
         # Trust common proxy headers
         if "x-forwarded-proto" in request.headers:
@@ -181,26 +182,30 @@ def create_app(
         response = await call_next(request)
         return response
 
-    @app.get("/health")
-    @app.get("/status")
-    async def health():
+    @fast_api_app.get("/health")
+    @fast_api_app.get("/status")
+    async def health(list_iris: bool = False):
         # check length of queue to ensure DB is responsive; we don't want to return 200 if the queue is stuck
         # if the service has already recorded a failure reason, return that
         # immediately – we don't even need the queue for this.
-        if getattr(app.state, "fail_state", False):
+        if getattr(fast_api_app.state, "fail_state", False):
             logging.error("Health check: fail_state is True, returning unhealthy status")
-            raise HTTPException(status_code=503, detail={"error": app.state.fail_reason})
+            raise HTTPException(status_code=503, detail={"error": fast_api_app.state.fail_reason})
 
         queue: PodpingQueue  # type: ignore
+        pending_iris: List[str] = []
         try:
-            queue = app.state.queue  # type: ignore
+            queue = fast_api_app.state.queue  # type: ignore
             pending_count = await queue.count_pending()
+            if list_iris:
+                pending_items, _ = await queue.peek_batch()
+                pending_iris = [item["url"] for item in pending_items]
         except Exception as exc:
             logging.error(f"Health check failed: unable to access queue: {exc}")
             raise HTTPException(status_code=503, detail="Queue inaccessible")
 
         if pending_count > 0:
-            logging.warning(f"Health check: {pending_count} pending items in queue")
+            logging.info(f"Health check: {pending_count} pending items in queue")
         return {
             "message": "Welcome to Podping HivePinger API",
             "version": __version__,
@@ -208,10 +213,11 @@ def create_app(
             "session_id": session_id,
             "documentation": "/docs",
             "pending_queue_length": pending_count,
+            "pending_iris": pending_iris,
         }
 
-    @app.get("/podping/")
-    @app.get("/")
+    @fast_api_app.get("/podping/")
+    @fast_api_app.get("/")
     async def root(
         request: Request,
         url: HttpUrl = Query(..., description="URL to podping"),
@@ -232,18 +238,23 @@ def create_app(
         # enqueue for background processing — crash-safe after this commit
         queue: PodpingQueue = request.app.state.queue
         row_id = await queue.enqueue(url, medium.value, reason.value)
-        if row_id == 0:
-            logging.info(f"Duplicate podping not enqueued: {reason} {medium} {url}")
-        else:
-            logging.info(f"Enqueued podping id={row_id}: {reason} {medium} {url}")
 
-        if app.state.fail_state:
-            logging.error(f"Request received but service is in fail_state: {app.state.fail_reason}")
-            raise HTTPException(status_code=503, detail={"error": app.state.fail_reason})
+        log_func = logging.info if verbose else logging.debug
+
+        if row_id == 0:
+            log_func(f"Duplicate podping not enqueued: {reason} {medium} {url}")
+        else:
+            log_func(f"Enqueued podping id={row_id}: {reason} {medium} {url}")
+
+        if fast_api_app.state.fail_state:
+            logging.error(
+                f"Request received but service is in fail_state: {fast_api_app.state.fail_reason}"
+            )
+            raise HTTPException(status_code=503, detail={"error": fast_api_app.state.fail_reason})
 
         return {"message": "queued", "reason": reason, "medium": medium, "url": url}
 
-    return app
+    return fast_api_app
 
 
 @cli.command()
@@ -260,6 +271,12 @@ def serve(
     podping_prefix: str = typer.Option(
         "pp", help="Prefix for Hive operation IDs (default: 'pp', use 'pplt' for testing)"
     ),
+    verbose: bool = typer.Option(
+        False,
+        "--verbose",
+        "-v",
+        help="Enable verbose logging to see every received and sent podping url in the logs",
+    ),
 ):
     """Run the FastAPI server and any additional async tasks."""
     if not hive_account_name:
@@ -275,16 +292,27 @@ def serve(
     else:
         no_broadcast = False
 
+    env_verbose = os.getenv("VERBOSE", "false")
+    if env_verbose.lower() in ("true", "1", "yes"):
+        verbose = True
+
     if not hive_account_name or not hive_posting_key:
         logging.warning(
             "Hive account name or posting key not provided. Hive operations will not be sent."
         )
     logging.info(
-        f"Sending podpings with account={hive_account_name} no_broadcast={no_broadcast} prefix={podping_prefix}"
+        f"Sending podpings with account={hive_account_name} no_broadcast={no_broadcast} prefix={podping_prefix} verbose={verbose}"
     )
     asyncio.run(
         _serve(
-            host, port, workers, hive_account_name, hive_posting_key, no_broadcast, podping_prefix
+            host,
+            port,
+            workers,
+            hive_account_name,
+            hive_posting_key,
+            no_broadcast,
+            podping_prefix,
+            verbose,
         )
     )
 
@@ -297,14 +325,16 @@ async def _serve(
     hive_posting_key: str,
     no_broadcast: bool = False,
     podping_prefix: str = "pp",
+    verbose: bool = False,
 ):
     session_id = uuid.uuid4().int & (1 << 64) - 1
-    app = create_app(
+    fast_api_app = create_fast_api_app(
         session_id=session_id,
         hive_account_name=hive_account_name,
         hive_posting_key=hive_posting_key,
         no_broadcast=no_broadcast,
         podping_prefix=podping_prefix,
+        verbose=verbose,
     )
 
     # create a Hive client for use by the background loop; the lifespan
@@ -313,7 +343,7 @@ async def _serve(
     hive_client = get_hive_client(keys=[hive_posting_key], nobroadcast=no_broadcast)
 
     config = uvicorn.Config(
-        app,
+        fast_api_app,
         host=host,
         port=port,
         workers=workers,
@@ -332,9 +362,9 @@ async def _serve(
         alive for 30 minutes at a time and will recreate it on error.
         """
         # wait for queue initialization from lifespan
-        while not hasattr(app.state, "queue"):
+        while not hasattr(fast_api_app.state, "queue"):
             await asyncio.sleep(0.1)
-        queue: PodpingQueue = app.state.queue  # type: ignore
+        queue: PodpingQueue = fast_api_app.state.queue  # type: ignore
 
         # the previous implementation recorded a "last_run" timestamp and
         # sent a batch as soon as the service started; that meant the very
@@ -355,6 +385,9 @@ async def _serve(
             )
             last_client_creation = time()
 
+        log_func = logging.info if verbose else logging.debug
+        log_func("background_loop: checking for pending podpings to send")
+
         while True:
             # if the queue has been closed (shutdown) bail out early
             if getattr(queue, "_db", None) is None:
@@ -362,7 +395,10 @@ async def _serve(
                 break
 
             # also respect explicit shutdown event if set
-            if hasattr(app.state, "shutdown_event") and app.state.shutdown_event.is_set():
+            if (
+                hasattr(fast_api_app.state, "shutdown_event")
+                and fast_api_app.state.shutdown_event.is_set()
+            ):
                 logging.info("background_loop: shutdown event set, exiting")
                 break
 
@@ -432,10 +468,10 @@ async def _serve(
                                     if hive_client and hive_client.rpc
                                     else "N/A"
                                 )
-                                app.state.fail_state = (
+                                fast_api_app.state.fail_state = (
                                     False  # clear any previous failure state on successful send
                                 )
-                                app.state.fail_reason = (
+                                fast_api_app.state.fail_reason = (
                                     ""  # clear any previous failure reason on successful send
                                 )
                                 logging.info(
@@ -445,7 +481,7 @@ async def _serve(
                                     await queue.mark_sent(
                                         item["url"], item["medium"], item["reason"], str(trx_id)
                                     )
-                                    logging.debug(f"{trx_id} {item['url']} marked sent")
+                                    log_func(f"{trx_id} {item['url']} marked sent")
                                 # successfully sent, now remove from pending
                                 ids_to_remove = [item["id"] for item in batch_items]
                                 await queue.remove_pending(ids_to_remove)
@@ -453,8 +489,8 @@ async def _serve(
                                 logging.error(
                                     f"Failed to send podping batch op={json_id} count={len(items)}: {ex}"
                                 )
-                                app.state.fail_state = True  # signal unhealthy status
-                                app.state.fail_reason = f"CustomJsonSendError: {ex}"
+                                fast_api_app.state.fail_state = True  # signal unhealthy status
+                                fast_api_app.state.fail_reason = f"CustomJsonSendError: {ex}"
                                 if "RC exhaustion" in str(ex):
                                     await asyncio.sleep(
                                         60
@@ -497,4 +533,4 @@ if __name__ == "__main__":
     cli()
 else:
     # Create app with default config for module imports
-    app = create_app()
+    app = create_fast_api_app()

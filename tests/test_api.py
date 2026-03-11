@@ -1,13 +1,13 @@
 import pytest
 from fastapi.testclient import TestClient
 
-from hivepinger.api import create_app
+from hivepinger.api import create_fast_api_app
 
 
 @pytest.fixture
 def client(tmp_path):
     db_path = str(tmp_path / "test_api.db")
-    app = create_app(db_path=db_path)
+    app = create_fast_api_app(db_path=db_path)
     with TestClient(app, raise_server_exceptions=True) as c:
         yield c
 
@@ -63,7 +63,7 @@ def test_startup_event_sets_fail_state(monkeypatch, tmp_path):
     monkeypatch.setattr(api, "get_hive_client", lambda *args, **kwargs: DummyClient())
 
     # pass dummy hive parameters; they aren't used by the failing stub
-    app = api.create_app(
+    app = api.create_fast_api_app(
         db_path=db_path,
         hive_account_name="acct",
         hive_posting_key="key",
@@ -106,7 +106,7 @@ def test_lifespan_sets_shutdown_event(tmp_path):
 
     api.send_custom_json = noop_send  # type: ignore
 
-    app = api.create_app(db_path=db_path)
+    app = api.create_fast_api_app(db_path=db_path)
 
     # the event is only attached when the lifespan context begins
     async def run_ctx():
@@ -131,7 +131,7 @@ def test_health_priority_over_queue(tmp_path):
     from hivepinger import api
 
     db_path = str(tmp_path / "test_api.db")
-    app = api.create_app(db_path=db_path)
+    app = api.create_fast_api_app(db_path=db_path)
 
     # simulate startup completed but queue never set or later removed
     app.state.fail_state = True
@@ -166,7 +166,7 @@ def test_health_handles_queue_error(tmp_path, monkeypatch):
         return {}
 
     monkeypatch.setattr(api, "send_custom_json", noop_send)
-    app = api.create_app(db_path=db_path)
+    app = api.create_fast_api_app(db_path=db_path)
 
     # ensure queue is open normally
     async def do_nothing():
