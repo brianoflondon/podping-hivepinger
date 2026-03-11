@@ -5,7 +5,26 @@ from hivepinger.api import create_fast_api_app
 
 
 @pytest.fixture
-def client(tmp_path):
+def client(tmp_path, monkeypatch):
+    # stub out Hive interactions so the lifespan startup ping does not
+    # attempt to parse a real posting key or contact the network.  The
+    # tests themselves focus on API behaviour and queue logic, not the
+    # Hive client, so we stub these globally for any test using the
+    # ``client`` fixture.
+    from hivepinger import api
+
+    class DummyClient:
+        def __init__(self):
+            # only ``rpc.url`` is accessed by the startup code
+            self.rpc = type("R", (), {"url": "http://node"})()
+
+    monkeypatch.setattr(api, "get_hive_client", lambda *args, **kwargs: DummyClient())
+
+    async def noop_send(*args, **kwargs):
+        return {}
+
+    monkeypatch.setattr(api, "send_custom_json", noop_send)
+
     db_path = str(tmp_path / "test_api.db")
     app = create_fast_api_app(db_path=db_path)
     with TestClient(app, raise_server_exceptions=True) as c:

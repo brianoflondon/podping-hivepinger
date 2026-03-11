@@ -49,7 +49,7 @@ async def test_dedup_blocks_recently_sent(queue: PodpingQueue):
     # simulate having sent it just now
     await queue.mark_sent(url, "music", "live", "abc123")
 
-    # enqueue the same URL again – dedup now happens on enqueue
+    # enqueue the same tuple again – dedup should fire
     row = await queue.enqueue(url, "music", "live")
     assert row == 0
 
@@ -57,6 +57,20 @@ async def test_dedup_blocks_recently_sent(queue: PodpingQueue):
     batch = await queue.dequeue_batch()
     assert len(batch) == 1
     assert batch[0]["url"] == url
+
+    # however, changing the reason or medium should allow a new row
+    row2 = await queue.enqueue(url, "music", "liveEnd")
+    assert row2 != 0
+    row3 = await queue.enqueue(url, "video", "live")
+    assert row3 != 0
+
+    # after the earlier dequeue the queue is empty; only the two new rows
+    # should be present now.
+    batch2 = await queue.dequeue_batch()
+    assert len(batch2) == 2
+    reasons = {item["reason"] for item in batch2}
+    mediums = {item["medium"] for item in batch2}
+    assert "liveEnd" in reasons and "video" in mediums
 
 
 @pytest.mark.asyncio
@@ -70,10 +84,16 @@ async def test_dedup_blocks_pending(queue: PodpingQueue):
     second = await queue.enqueue(url, "podcast", "update")
     assert second == 0
 
-    # only one row should be in the queue
+    # a different reason or medium should be allowed
+    third = await queue.enqueue(url, "podcast", "live")
+    assert third != 0
+    fourth = await queue.enqueue(url, "audio", "update")
+    assert fourth != 0
+
+    # queue should contain three entries now
     batch = await queue.dequeue_batch()
-    assert len(batch) == 1
-    assert batch[0]["url"] == url
+    assert len(batch) == 3
+    assert all(item["url"] == url for item in batch)
 
 
 @pytest.mark.asyncio
@@ -187,6 +207,7 @@ async def test_multiple_urls_partial_dedup(queue: PodpingQueue):
     """When some URLs are dupes and some are new, only new ones are returned."""
     await queue.mark_sent("https://example.com/dup.xml", "podcast", "update", "trx1")
 
+    # dup entry has same tuple as the sent record and should be dropped
     await queue.enqueue("https://example.com/dup.xml", "podcast", "update")
     await queue.enqueue("https://example.com/new.xml", "music", "live")
 
@@ -207,6 +228,19 @@ async def test_multiple_urls_partial_dedup(queue: PodpingQueue):
     assert len(upd) == 1 and upd[0]["url"].endswith("/a")
     live = await queue.dequeue_batch(reason="live")
     assert len(live) == 1 and live[0]["url"].endswith("/b")
+
+
+@pytest.mark.asyncio
+async def test_peek_batch_distinguishes_reasons(queue: PodpingQueue):
+    """Items with identical URLs but different reasons/mediums should both
+    be visible when peeking; dedup filtering must use the full tuple."""
+    url = "https://example.com/dup.xml"
+    await queue.enqueue(url, "podcast", "live")
+    await queue.enqueue(url, "podcast", "liveEnd")
+    batch, ids = await queue.peek_batch()
+    assert len(batch) == 2
+    reasons = {item["reason"] for item in batch}
+    assert reasons == {"live", "liveEnd"}
 
 
 @pytest.mark.asyncio

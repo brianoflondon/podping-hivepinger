@@ -244,7 +244,7 @@ def create_fast_api_app(
         if row_id == 0:
             log_func(f"Duplicate podping not enqueued: {reason} {medium} {url}")
         else:
-            log_func(f"Enqueued podping id={row_id}: {reason} {medium} {url}")
+            log_func(f"Enqueued podping id={row_id:>7}: {reason} {medium} {url}")
 
         if fast_api_app.state.fail_state:
             logging.error(

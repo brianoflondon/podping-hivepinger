@@ -12,7 +12,6 @@ DEDUP_WINDOW_SECONDS = 180  # ignore duplicate URLs within this window
 PURGE_SENT_AFTER_SECONDS = 86400  # 24 hours
 
 
-
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS pending_podpings (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -91,29 +90,37 @@ class PodpingQueue:
         url_str = str(url)
         now = time.time()
 
-        # dedup against sent records
+        # dedup against sent records. previously we only considered the
+        # URL, which meant a rapid pair of ``live``/``liveEnd`` podpings would
+        # be treated as duplicates.  the user reported exactly that issue, so
+        # we now include **medium** and **reason** in the check.  the stored
+        # tables already record those fields, so the queries are extended
+        # accordingly.
         cutoff = now - DEDUP_WINDOW_SECONDS
         async with self._db.execute(
-            "SELECT 1 FROM sent_podpings WHERE url = ? AND sent_at > ? LIMIT 1",
-            (url_str, cutoff),
+            "SELECT 1 FROM sent_podpings WHERE url = ? AND medium = ? AND reason = ? "
+            "AND sent_at > ? LIMIT 1",
+            (url_str, medium, reason, cutoff),
         ) as cur:
             recently = await cur.fetchone()
         if recently:
-            logging.debug(f"Dedup skip: {url_str} was sent within last {DEDUP_WINDOW_SECONDS}s")
+            logging.debug(
+                f"Dedup skip: {url_str} ({medium},{reason}) was sent within last "
+                f"{DEDUP_WINDOW_SECONDS}s"
+            )
             return 0
 
-        # also avoid enqueueing a URL that's already pending. this check has no
-        # time window – once something is queued we don't need another copy
-        # until the first one is either sent or removed. doing this here keeps
-        # the behaviour consistent with the log messages produced by the API
-        # layer when ``enqueue`` returns 0.
+        # also avoid enqueueing an identical tuple that is already pending.
+        # this check still has no time window – once a particular combination
+        # is queued we don't need another copy until the first one is either
+        # sent or removed.
         async with self._db.execute(
-            "SELECT 1 FROM pending_podpings WHERE url = ? LIMIT 1",
-            (url_str,),
+            "SELECT 1 FROM pending_podpings WHERE url = ? AND medium = ? AND reason = ? LIMIT 1",
+            (url_str, medium, reason),
         ) as cur:
             already = await cur.fetchone()
         if already:
-            logging.debug(f"Dedup skip: {url_str} already pending")
+            logging.debug(f"Dedup skip: {url_str} ({medium},{reason}) already pending")
             return 0
 
         async with self._db.execute(
@@ -162,7 +169,6 @@ class PodpingQueue:
         assert self._db is not None
 
         now = time.time()
-        cutoff = now - DEDUP_WINDOW_SECONDS
 
         # build query with optional filters
         base: str = "SELECT id, url, medium, reason, received_at FROM pending_podpings"
@@ -186,18 +192,22 @@ class PodpingQueue:
 
         to_send: List[Dict[str, Any]] = []
         all_ids: List[int] = []
-        seen_in_batch: Set[str] = set()
+        # previously we only de‑duplicated on ``url`` within a batch; this had
+        # the same flaw as the enqueue logic.  use a tuple of all three fields
+        # so that different reasons/mediums are treated separately.
+        seen_in_batch: Set[tuple] = set()
 
         for row_id, url, medium, reason, received_at in rows:
             all_ids.append(row_id)
 
-            # skip any URL we’ve already processed this batch (either because it
-            # was marked sent or because it was queued to send).  doing it here
-            # prevents repeated log lines.
-            if url in seen_in_batch:
+            key = (url, medium, reason)
+            # skip any triple we’ve already processed this batch (either because
+            # it was marked sent or because we’ve already queued it). doing it
+            # here prevents repeated log lines.
+            if key in seen_in_batch:
                 continue
 
-            seen_in_batch.add(url)
+            seen_in_batch.add(key)
             to_send.append(
                 {
                     "id": row_id,
