@@ -444,7 +444,7 @@ async def _serve(
                                     await queue.mark_sent(
                                         item["url"], item["medium"], item["reason"], trx_id
                                     )
-                                    logging.info(f"{item['url']} marked sent with trx_id={trx_id}")
+                                    logging.info(f"{trx_id=} {item['url']} marked sent")
                                 # successfully sent, now remove from pending
                                 ids_to_remove = [item["id"] for item in batch_items]
                                 await queue.remove_pending(ids_to_remove)
