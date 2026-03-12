@@ -139,8 +139,8 @@ async def send_test_podping(
             "reason": reason,
             "medium": medium,
         }
-        # call_url = "https://hivepinger.podping.org/"
-        call_url = "http://localhost:1820/"
+        call_url = "https://hivepinger.podping.org/"
+        # call_url = "http://localhost:1820/"
         response = await http_client.get(call_url, params=params, timeout=1.0)
         response_data = response.json()
         message = response_data.get("message", "failed")

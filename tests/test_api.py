@@ -1,7 +1,7 @@
 import pytest
 from fastapi.testclient import TestClient
 
-from hivepinger.api import create_fast_api_app
+from hivepinger.api import RATE_LIMIT_MAX, create_fast_api_app
 
 
 @pytest.fixture
@@ -58,6 +58,42 @@ def test_root_success_enqueued_and_duplicate(client):
     assert response2.status_code == 200
     data2 = response2.json()
     assert data2["message"] == "duplicate"
+
+
+def test_rate_limit(client):
+    """IP-based rate limiting should cap at 60 requests per minute.
+
+    Because our shared ``client`` fixture enables ``raise_server_exceptions``
+    we create a new TestClient for this test so that 429 responses are
+    returned normally instead of being propagated as errors.
+    """
+    from fastapi.testclient import TestClient
+
+    # recreate the app/fixture environment but disable exception raising
+    app = client.app
+    with TestClient(app, raise_server_exceptions=False) as c:
+        headers = {"cf-connecting-ip": "1.2.3.4"}
+        params = {
+            "url": "https://feeds.example.org/livestream/rss",
+            "reason": "live",
+            "medium": "music",
+        }
+
+        # first 60 requests should pass
+        for i in range(RATE_LIMIT_MAX):
+            resp = c.get("/", params=params, headers=headers)
+            assert resp.status_code == 200, f"failed on iteration {i}"
+
+        # the 61st should be rate-limited
+        resp = c.get("/", params=params, headers=headers)
+        assert resp.status_code == 429
+        assert resp.json()["detail"] == "Rate limit exceeded"
+
+        # a request from a different IP should still work
+        headers2 = {"cf-connecting-ip": "5.6.7.8"}
+        resp = c.get("/", params=params, headers=headers2)
+        assert resp.status_code == 200
+
 
 def test_root_validation_error(client):
     response = client.get("/", params={"url": "", "reason": "bad", "medium": "nope"})
