@@ -1,3 +1,5 @@
+import logging
+
 import pytest
 
 from hivewatcher import watch
@@ -22,7 +24,15 @@ class DummyHive:
 
 
 @pytest.mark.asyncio
-async def test_async_watch_filters(monkeypatch, capsys):
+async def test_async_watch_filters(monkeypatch, caplog):
+    """Verify async_watch filters and logs matching operations.
+
+    The watcher now emits logging instead of printing; ``caplog`` is used to
+    capture messages.  We also confirm the dummy client's streaming method
+    was invoked.
+    """
+    caplog.set_level(logging.INFO)
+
     # patch Hive used in watcher to our dummy; also ensure the
     # ``Blockchain`` wrapper simply returns the provided client so that
     # ``client.stream`` is exercised (and recorded via ``stream_called``).
@@ -33,11 +43,11 @@ async def test_async_watch_filters(monkeypatch, capsys):
     # assert the node value below
     client = DummyHive(node="https://example.com")
 
-    await watch.async_watch("pp", hive_client=client, max_ops=2)
-    out = capsys.readouterr().out
-    # op ids are now printed with the Podping object
-    assert "pp_first" in out
-    assert "pplt_second" in out
-    assert "nope" not in out
+    await watch.async_watch("pp", hive_client=client, max_ops=2)  # type: ignore
+
+    records = [r.getMessage() for r in caplog.records]
+    assert any("pp_first" in msg for msg in records)
+    assert any("pplt_second" in msg for msg in records)
+    assert not any("nope" in msg for msg in records)
     # ensure our dummy blockchain stream method was actually used
     assert client.stream_called

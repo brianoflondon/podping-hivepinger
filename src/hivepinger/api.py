@@ -134,9 +134,6 @@ def create_lifespan(
     return lifespan
 
 
-# This will be replaced when we parse command line arguments
-app = None
-
 # command-line interface
 cli = typer.Typer()
 
@@ -158,20 +155,24 @@ def create_fast_api_app(
     """
     if not session_id:
         session_id = uuid.uuid4().int & (1 << 64) - 1
-    fast_api_app = FastAPI(
-        lifespan=create_lifespan(
-            db_path,
-            hive_account_name,
-            hive_posting_key,
-            no_broadcast,
-            podping_prefix,
-            session_id,
-        ),
-        title="Podping HivePinger API",
-        description="The API to receive feed updates and send out Podping on Hive.",
-        version=__version__ or "0.0.0",
-        redirect_slashes=False,
-    )
+    try:
+        fast_api_app = FastAPI(
+            lifespan=create_lifespan(
+                db_path,
+                hive_account_name,
+                hive_posting_key,
+                no_broadcast,
+                podping_prefix,
+                session_id,
+            ),
+            title="Podping HivePinger API",
+            description="The API to receive feed updates and send out Podping on Hive.",
+            version=__version__ or "0.0.0",
+            redirect_slashes=False,
+        )
+    except Exception as exc:
+        logging.exception(f"Error creating FastAPI app: {exc}")
+        raise
 
     # Add proxy middleware to trust headers from reverse proxy
     # This allows FastAPI to correctly detect HTTPS when behind nginx proxy
@@ -255,11 +256,10 @@ def create_fast_api_app(
         row_id = await queue.enqueue(url, medium.value, reason.value)
 
         log_func = logging.info if verbose else logging.debug
-
-        if row_id == 0:
-            log_func(f"Duplicate podping not enqueued: {reason} {medium} {url}")
-        else:
-            log_func(f"Enqueued podping id={row_id:>7}: {reason} {medium} {url}")
+        message = "enqueued" if row_id > 0 else "duplicate"
+        log_func(
+            f"{message:>10} podping: reason={reason} medium={medium} url={url} row_id={row_id}"
+        )
 
         if fast_api_app.state.fail_state:
             logging.error(
@@ -267,7 +267,7 @@ def create_fast_api_app(
             )
             raise HTTPException(status_code=503, detail={"error": fast_api_app.state.fail_reason})
 
-        return {"message": "queued", "reason": reason, "medium": medium, "url": url}
+        return {"message": message, "reason": reason, "medium": medium, "url": url}
 
     return fast_api_app
 
@@ -550,4 +550,4 @@ if __name__ == "__main__":
     cli()
 else:
     # Create app with default config for module imports
-    app = create_fast_api_app()
+    fast_api_app = create_fast_api_app()
