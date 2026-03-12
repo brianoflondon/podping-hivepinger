@@ -43,7 +43,7 @@ async def test_async_watch_filters(monkeypatch, caplog):
     # assert the node value below
     client = DummyHive(node="https://example.com")
 
-    await watch.async_watch("pp", hive_client=client, max_ops=2)
+    await watch.async_watch("pp", hive_client=client, max_ops=2)  # type: ignore
 
     records = [r.getMessage() for r in caplog.records]
     assert any("pp_first" in msg for msg in records)
