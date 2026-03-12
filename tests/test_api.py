@@ -31,7 +31,7 @@ def client(tmp_path, monkeypatch):
         yield c
 
 
-def test_root_success(client):
+def test_root_success_enqueued_and_duplicate(client):
     response = client.get(
         "/",
         params={
@@ -47,6 +47,17 @@ def test_root_success(client):
     assert data["medium"] == "music"
     assert data["url"] == "https://feeds.example.org/livestream/rss"
 
+    response2 = client.get(
+        "/",
+        params={
+            "url": "https://feeds.example.org/livestream/rss",
+            "reason": "live",
+            "medium": "music",
+        },
+    )
+    assert response2.status_code == 200
+    data2 = response2.json()
+    assert data2["message"] == "duplicate"
 
 def test_root_validation_error(client):
     response = client.get("/", params={"url": "", "reason": "bad", "medium": "nope"})
