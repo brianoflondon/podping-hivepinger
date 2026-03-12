@@ -114,10 +114,10 @@ async def async_watch(
                 logging.warning(exc)
                 continue
             # include the operation id in output for easier debugging/testing
-            print(f"{podping} id={op.get('id', '')}")
-            print(f"{posting_account} in trx {op.get('trx_id', '')}")
+            logging.info(f"{podping} id={op.get('id', '')}")
+            logging.info(f"{posting_account} in trx {op.get('trx_id', '')}")
             for iri in podping.iris:
-                print(f"  - {iri}")
+                logging.info(f"  - {iri}")
                 await send_test_podping(
                     url=iri,
                     medium=podping.medium.value,
@@ -139,10 +139,13 @@ async def send_test_podping(
             "reason": reason,
             "medium": medium,
         }
+        # call_url = "https://hivepinger.podping.org/"
         call_url = "http://localhost:1820/"
         response = await http_client.get(call_url, params=params, timeout=1.0)
+        response_data = response.json()
+        message = response_data.get("message", "failed")
         response.raise_for_status()
-        logging.info(f"Sent test podping to {call_url} with params {params}")
+        logging.info(f"{message} {call_url} with params {params}")
     except httpx.RequestError as exc:
         logging.warning(f"Failed to send test podping for {url}: {exc}")
     except httpx.HTTPStatusError as exc:
@@ -151,6 +154,11 @@ async def send_test_podping(
 
 if __name__ == "__main__":  # allow ``python -m hivewatcher.watch``
     try:
+        logging.basicConfig(
+            level=logging.INFO,
+            format="%(asctime)s %(levelname)-8s %(module)-25s %(lineno)4d : %(message)s",
+            datefmt="%m-%dT%H:%M:%S%z",
+        )
         cli()
     except (KeyboardInterrupt, SystemExit):
         logging.info("Watcher stopped by user")
