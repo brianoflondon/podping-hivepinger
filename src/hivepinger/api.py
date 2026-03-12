@@ -45,6 +45,7 @@ MAX_IRIS_PER_PODPING = 120
 RATE_LIMIT_MAX = 90  # calls
 RATE_LIMIT_PERIOD = 60  # seconds
 
+
 def create_lifespan(
     db_path: str,
     hive_account_name: str,
@@ -268,10 +269,13 @@ def create_fast_api_app(
         reason: Reason = Query(Reason.UPDATE, description="Reason string"),
         medium: Medium = Query(Medium.PODCAST, description="Medium string"),
     ) -> dict[str, Any]:
-        """Simple endpoint matching the request signature
+        """
+        Send a podping by enqueuing the provided URL and metadata for background processing.
+        Performs de-duplication: will not send the same ULR with the same reason and medium more than once
+        within the queue retention period (180s for regular updates).
 
         Example:
-        GET https://podping.cloud/?url=https://feeds.example.org/livestream/rss&reason=live&medium=music
+        `GET http://localhost/?url=https://feeds.example.org/livestream/rss&reason=live&medium=music`
         """
 
         try:
