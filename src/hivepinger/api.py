@@ -2,6 +2,7 @@ import asyncio
 import logging
 import os
 import uuid
+from collections import deque
 from time import time
 from typing import Any, AsyncContextManager, Callable, List
 
@@ -9,6 +10,7 @@ import typer
 import uvicorn
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.concurrency import asynccontextmanager
+from fastapi.responses import JSONResponse
 from pydantic import HttpUrl, ValidationError
 
 # absolute import to support running as a script
@@ -40,6 +42,8 @@ REASON_INTERVALS: dict[str, float] = {
 
 MAX_IRIS_PER_PODPING = 120
 
+RATE_LIMIT_MAX = 90  # calls
+RATE_LIMIT_PERIOD = 60  # seconds
 
 def create_lifespan(
     db_path: str,
@@ -176,6 +180,25 @@ def create_fast_api_app(
 
     # Add proxy middleware to trust headers from reverse proxy
     # This allows FastAPI to correctly detect HTTPS when behind nginx proxy
+    # simple in-memory rate limiting by IP (sliding window)
+    # note: this is intentionally basic and will reset when the process
+    # restarts; suitable for lightweight usage or tests.  If the service is
+    # deployed behind multiple workers the limit applies per worker instance.
+
+    _rate_window: dict[str, deque[float]] = {}
+
+    def _check_rate(ip: str) -> bool:
+        now = time()
+        dq = _rate_window.setdefault(ip, deque())
+        # purge stale entries
+        cutoff = now - RATE_LIMIT_PERIOD
+        while dq and dq[0] <= cutoff:
+            dq.popleft()
+        if len(dq) >= RATE_LIMIT_MAX:
+            return False
+        dq.append(now)
+        return True
+
     @fast_api_app.middleware("http")
     async def proxy_middleware(request: Request, call_next):
         # Trust common proxy headers
@@ -183,6 +206,11 @@ def create_fast_api_app(
             request.scope["scheme"] = request.headers["x-forwarded-proto"]
         if "x-forwarded-host" in request.headers:
             request.scope["server"] = (request.headers["x-forwarded-host"], None)
+        client_ip = request.headers.get("cf-connecting-ip", None)
+        if client_ip:
+            if not _check_rate(client_ip):
+                logging.warning(f"Rate limit exceeded for {client_ip}")
+                return JSONResponse(status_code=429, content={"detail": "Rate limit exceeded"})
 
         response = await call_next(request)
         return response
