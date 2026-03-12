@@ -546,7 +546,7 @@ if __name__ == "__main__":
         datefmt="%m-%dT%H:%M:%S%z",
     )
 
-    logging.info("Application startup: initializing resources")
+    logging.info(f"podping-hivepinger startup: initializing resources {__version__}")
     cli()
 else:
     # Create app with default config for module imports
