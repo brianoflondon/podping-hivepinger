@@ -4,7 +4,7 @@ from typing import Any, Dict, List
 
 from pydantic import BaseModel, Field
 
-from hivepinger import __version__  # absolute import to support running as a script
+from hivepinger import __version__
 
 CURRENT_PODPING_VERSION = "1.1"
 

@@ -406,7 +406,7 @@ async def _serve(
         Each reason/medium combination is treated as a separate operation id; items
         are batched together into a single ``Podping`` model and sent with the
         corresponding Hive operation id.  The loop keeps a single Hive client
-        alive for 30 minutes at a time and will recreate it on error.
+        alive for 30 minutes at a time and will recreate it on error.
         """
         # wait for queue initialization from lifespan
         while not hasattr(fast_api_app.state, "queue"):
