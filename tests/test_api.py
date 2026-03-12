@@ -42,7 +42,7 @@ def test_root_success(client):
     )
     assert response.status_code == 200
     data = response.json()
-    assert data["message"] == "queued"
+    assert data["message"] == "enqueued"
     assert data["reason"] == "live"
     assert data["medium"] == "music"
     assert data["url"] == "https://feeds.example.org/livestream/rss"
