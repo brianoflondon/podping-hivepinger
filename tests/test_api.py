@@ -38,6 +38,7 @@ def test_root_success_enqueued_and_duplicate(client):
             "url": "https://feeds.example.org/livestream/rss",
             "reason": "live",
             "medium": "music",
+            "detailed_response": True,
         },
     )
     assert response.status_code == 200
@@ -53,11 +54,64 @@ def test_root_success_enqueued_and_duplicate(client):
             "url": "https://feeds.example.org/livestream/rss",
             "reason": "live",
             "medium": "music",
+            "detailed_response": True,
         },
     )
     assert response2.status_code == 200
     data2 = response2.json()
     assert data2["message"] == "duplicate"
+
+    response3 = client.get(
+        "/",
+        params={
+            "url": "https://feeds.example.org/livestream/rss",
+            "reason": "live",
+            "medium": "music",
+        },
+    )
+    assert response2.status_code == 200
+    assert response3.text == "Success!"
+
+
+def test_check_returns_trx_history(client, tmp_path):
+    # first enqueue and mark a couple of different URLs as sent with fake trx ids
+    from hivepinger import podping_queue
+
+    # create a fresh queue instance pointing at new db so we can manually insert
+    queue = podping_queue.PodpingQueue(str(tmp_path / "history.db"))
+    import asyncio
+
+    async def setup_history():
+        await queue.open()
+        # simulate two sent entries for the same URL and one for another URL
+        await queue.mark_sent("https://feed.example/1", "podcast", "update", "trxA")
+        await queue.mark_sent("https://feed.example/1", "music", "live", "trxB")
+        await queue.mark_sent("https://feed.example/other", "podcast", "update", "trxC")
+        # do not close the queue; TestClient will continue to use it
+
+    asyncio.run(setup_history())
+
+    # monkeypatch the client to use our prepared queue
+    client.app.state.queue = queue
+
+    # enqueue a pending item for the same URL (different reason) so pending is True
+    asyncio.run(queue.enqueue("https://feed.example/1", "podcast", "live"))
+
+    # query for first URL: should be pending and still show sent ids
+    resp = client.get("/check", params={"url": "https://feed.example/1"})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["pending"] is True
+    assert body["sent"] == ["trxA", "trxB"]
+    assert isinstance(body["pending_details"], list)
+    assert any(d["medium"] == "podcast" and d["reason"] == "live" for d in body["pending_details"])
+    # ensure we expose a timestamp
+    assert all("received_at" in d for d in body["pending_details"])
+
+    # query for a URL with no history or pending rows
+    resp2 = client.get("/check", params={"url": "https://does.not.exist/"})
+    assert resp2.status_code == 200
+    assert resp2.json() == {"pending": False, "pending_details": [], "sent": []}
 
 
 def test_rate_limit(client):

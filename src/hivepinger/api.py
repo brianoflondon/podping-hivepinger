@@ -4,14 +4,13 @@ import os
 import uuid
 from collections import deque
 from time import time
-from typing import Any, AsyncContextManager, Callable, List
+from typing import Any, AsyncContextManager, Callable
 
 import typer
 import uvicorn
-from fastapi import FastAPI, HTTPException, Query, Request
+from fastapi import FastAPI, Request
 from fastapi.concurrency import asynccontextmanager
 from fastapi.responses import JSONResponse
-from pydantic import HttpUrl, ValidationError
 
 # absolute import to support running as a script
 from hivepinger import __version__
@@ -216,90 +215,13 @@ def create_fast_api_app(
         response = await call_next(request)
         return response
 
-    @fast_api_app.get("/health")
-    @fast_api_app.get("/status")
-    async def health(list_iris: bool = False) -> dict[str, Any]:
-        # check length of queue to ensure DB is responsive; we don't want to return 200 if the queue is stuck
-        # if the service has already recorded a failure reason, return that
-        # immediately – we don't even need the queue for this.
+    # delegate definition of the HTTP endpoints to a helper in a separate
+    # module so the core ``api.py`` remains focused on wiring and setup.
+    from hivepinger.api_routes import register_routes  # local import to avoid
 
-        health = {
-            "message": "Welcome to Podping HivePinger API",
-            "version": __version__,
-            "status": "OK",
-            "session_id": session_id,
-            "podping_prefix": podping_prefix,
-            "no_broadcast": no_broadcast,
-            "documentation": "/docs",
-        }
+    # circularity during early application import
 
-        queue: PodpingQueue  # type: ignore
-        pending_iris: List[str] = []
-        try:
-            queue = fast_api_app.state.queue  # type: ignore
-            pending_count = await queue.count_pending()
-            if list_iris:
-                pending_items, _ = await queue.peek_batch()
-                pending_iris = [item["url"] for item in pending_items]
-        except Exception as exc:
-            logging.error(f"Health check failed: unable to access queue: {exc}")
-            pending_count = 0
-            pending_iris = []
-            raise HTTPException(status_code=503, detail="Queue inaccessible")
-
-        health["pending_queue_length"] = pending_count
-        health["pending_iris"] = pending_iris
-
-        if getattr(fast_api_app.state, "fail_state", False):
-            logging.error("Health check: fail_state is True, returning unhealthy status")
-            raise HTTPException(
-                status_code=503,
-                detail={"error": fast_api_app.state.fail_reason, "health": health},
-            )
-
-        if pending_count > 0:
-            logging.info(f"Health check: {pending_count} pending items in queue")
-        return health
-
-    @fast_api_app.get("/podping/")
-    @fast_api_app.get("/")
-    async def root(
-        request: Request,
-        url: HttpUrl = Query(..., description="URL to podping"),
-        reason: Reason = Query(Reason.UPDATE, description="Reason string"),
-        medium: Medium = Query(Medium.PODCAST, description="Medium string"),
-    ) -> dict[str, Any]:
-        """
-        Send a podping by enqueuing the provided URL and metadata for background processing.
-        Performs de-duplication: will not send the same ULR with the same reason and medium more than once
-        within the queue retention period (180s for regular updates).
-
-        Example:
-        `GET http://localhost/?url=https://feeds.example.org/livestream/rss&reason=live&medium=music`
-        """
-
-        try:
-            logging.debug(f"Received {reason} {medium} {url}")
-        except ValidationError as exc:
-            raise HTTPException(status_code=422, detail=exc.errors())
-
-        # enqueue for background processing — crash-safe after this commit
-        queue: PodpingQueue = request.app.state.queue
-        row_id = await queue.enqueue(url, medium.value, reason.value)
-
-        log_func = logging.info if verbose else logging.debug
-        message = "enqueued" if row_id > 0 else "duplicate"
-        log_func(
-            f"{message:>10} podping: reason={reason} medium={medium} url={url} row_id={row_id}"
-        )
-
-        if fast_api_app.state.fail_state:
-            logging.error(
-                f"Request received but service is in fail_state: {fast_api_app.state.fail_reason}"
-            )
-            raise HTTPException(status_code=503, detail={"error": fast_api_app.state.fail_reason})
-
-        return {"message": message, "reason": reason, "medium": medium, "url": url}
+    register_routes(fast_api_app, session_id, podping_prefix, no_broadcast, verbose)
 
     return fast_api_app
 
@@ -335,7 +257,9 @@ def serve(
     no_broadcast_str = os.getenv("NO_BROADCAST", "false")
     if no_broadcast_str.lower() in ("true", "1", "yes"):
         no_broadcast = True
-        logging.warning("NO_BROADCAST is set to true. Transactions will not be broadcasted.")
+        logging.warning(
+            "NO_BROADCAST is set to true. Transactions will not be written to Hive (broadcast disabled)."
+        )
     else:
         no_broadcast = False
 

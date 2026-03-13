@@ -2,6 +2,7 @@
 
 import logging
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set
 
@@ -256,6 +257,64 @@ class PodpingQueue:
         cutoff = time.time() - PURGE_SENT_AFTER_SECONDS
         await self._db.execute("DELETE FROM sent_podpings WHERE sent_at < ?", (cutoff,))
         await self._db.commit()
+
+    async def find_trx_for_url(self, url: str) -> list[str]:
+        """Return a list of transaction IDs in which *url* was podpinged.
+
+        The search ignores ``medium`` and ``reason``; multiple entries may
+        exist for the same URL (for example if the same feed was sent with
+        different reasons).  The returned list preserves insertion order and
+        may contain duplicates; callers can dedupe if desired.
+        """
+        if self._db is None:
+            return []
+        async with self._db.execute(
+            "SELECT trx_id FROM sent_podpings WHERE url = ? ORDER BY sent_at",
+            (url,),
+        ) as cur:
+            rows = await cur.fetchall()
+        return [r[0] for r in rows]
+
+    async def has_pending_url(self, url: str) -> bool:
+        """Return True if *url* is currently in the pending queue.
+
+        The lookup ignores medium and reason; it is used by the `/check`
+        endpoint to indicate whether a given URL is still queued for sending.
+        """
+        if self._db is None:
+            return False
+        async with self._db.execute(
+            "SELECT 1 FROM pending_podpings WHERE url = ? LIMIT 1",
+            (url,),
+        ) as cur:
+            row = await cur.fetchone()
+        return row is not None
+
+    async def pending_details_for_url(self, url: str) -> list[dict[str, Any]]:
+        """
+        Returns a list of dicts with the following keys:
+        - `medium`: the medium associated with the pending podping
+        - `reason`: the reason enum value (e.g. update/live)
+        - `received_at`: epoch seconds (float) when the row was inserted
+        - `received_at_str`: ISO-8601 UTC string representation of `received_at`
+        """
+
+        if self._db is None:
+            return []
+        async with self._db.execute(
+            "SELECT medium, reason, received_at FROM pending_podpings WHERE url = ? ORDER BY received_at",
+            (url,),
+        ) as cur:
+            rows = await cur.fetchall()
+        return [
+            {
+                "medium": r[0],
+                "reason": r[1],
+                "received_at": r[2],
+                "received_at_str": datetime.fromtimestamp(r[2], tz=timezone.utc).isoformat(),
+            }
+            for r in rows
+        ]
 
     # ------------------------------------------------------------------
     # Convenience helpers for background batching logic

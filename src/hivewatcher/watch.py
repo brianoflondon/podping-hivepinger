@@ -138,6 +138,7 @@ async def send_test_podping(
             "url": url,
             "reason": reason,
             "medium": medium,
+            "detailed_response": True,
         }
         call_url = "https://hivepinger.podping.org/"
         # call_url = "http://localhost:1820/"
