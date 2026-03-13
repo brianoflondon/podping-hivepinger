@@ -1,3 +1,4 @@
+import logging
 from typing import Any, List
 
 from fastapi import FastAPI, HTTPException, Query, Request, Response
@@ -22,8 +23,8 @@ def register_routes(
     handlers can access them without relying on closure tricks or globals.
     """
 
-    @app.get("/health")
-    @app.get("/status")
+    @app.get("/health", tags=["Health"])
+    @app.get("/status", tags=["Health"])
     async def health(list_iris: bool = False) -> dict[str, Any]:
         """
         Performs a health check of the Podping HivePinger API.
@@ -80,8 +81,36 @@ def register_routes(
             logging.info(f"Health check: {pending_count} pending items in queue")
         return health
 
-    @app.get("/podping/", response_model=None)
-    @app.get("/", response_model=None)
+    @app.get("/check", tags=["Health"], response_model=None)
+    async def check(
+        url: HttpUrl = Query(..., description="URL to lookup"),
+    ) -> dict[str, Any]:
+        """
+        Return the pending or sent status and transaction IDs for a given URL.
+        This endpoint allows clients to check whether a specific URL is currently
+        pending in the queue or has already been sent in a transaction.
+        The response includes both the pending status and a list of
+        transaction IDs where the URL was previously sent.
+
+        History is only stored for 24 hours, so if a URL was sent more than
+        24 hours ago it will not appear in the results.
+
+        The response includes:
+        - `pending`: whether the URL is currently still queued for sending
+        - `sent`: list of transaction IDs where the URL was previously sent
+        """
+        try:
+            queue: PodpingQueue = app.state.queue  # type: ignore
+            sent_ids = await queue.find_trx_for_url(str(url))
+            pending_details = await queue.pending_details_for_url(str(url))
+            pending = bool(pending_details)
+            return {"pending": pending, "pending_details": pending_details, "sent": sent_ids}
+        except Exception as exc:  # pragma: no cover - defensive
+            logging.error(f"Check endpoint failed: unable to access queue: {exc}")
+            raise HTTPException(status_code=503, detail="Queue inaccessible")
+
+    @app.get("/podping/", tags=["Podping"], response_model=None)
+    @app.get("/", tags=["Podping"], response_model=None)
     async def root(
         request: Request,
         url: HttpUrl = Query(..., description="URL to podping"),

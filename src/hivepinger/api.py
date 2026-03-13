@@ -257,7 +257,9 @@ def serve(
     no_broadcast_str = os.getenv("NO_BROADCAST", "false")
     if no_broadcast_str.lower() in ("true", "1", "yes"):
         no_broadcast = True
-        logging.warning("NO_BROADCAST is set to true. Transactions will not be broadcasted.")
+        logging.warning(
+            "NO_BROADCAST is set to true. Transactions will not be written to Hive (broadcast disabled)."
+        )
     else:
         no_broadcast = False
 
