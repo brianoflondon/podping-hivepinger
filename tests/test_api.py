@@ -38,6 +38,7 @@ def test_root_success_enqueued_and_duplicate(client):
             "url": "https://feeds.example.org/livestream/rss",
             "reason": "live",
             "medium": "music",
+            "detailed_response": True,
         },
     )
     assert response.status_code == 200
@@ -53,11 +54,23 @@ def test_root_success_enqueued_and_duplicate(client):
             "url": "https://feeds.example.org/livestream/rss",
             "reason": "live",
             "medium": "music",
+            "detailed_response": True,
         },
     )
     assert response2.status_code == 200
     data2 = response2.json()
     assert data2["message"] == "duplicate"
+
+    response3 = client.get(
+        "/",
+        params={
+            "url": "https://feeds.example.org/livestream/rss",
+            "reason": "live",
+            "medium": "music",
+        },
+    )
+    assert response2.status_code == 200
+    assert response3.text == "Success!"
 
 
 def test_rate_limit(client):
