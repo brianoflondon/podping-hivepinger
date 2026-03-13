@@ -1,5 +1,11 @@
 # Podping Hivepinger
 
+[![pytest](https://github.com/brianoflondon/podping-hivepinger/actions/workflows/pytest.yml/badge.svg)](https://github.com/brianoflondon/podping-hivepinger/actions/workflows/pytest.yml)
+[![Docker publish](https://github.com/brianoflondon/podping-hivepinger/actions/workflows/docker_publish.yml/badge.svg)](https://github.com/brianoflondon/podping-hivepinger/actions/workflows/docker_publish.yml)
+[![Docker Pulls](https://img.shields.io/docker/pulls/brianoflondon/podping-hivepinger?color=blue)](https://hub.docker.com/r/brianoflondon/podping-hivepinger)
+[![Python](https://img.shields.io/badge/python-3.11%2B-blue)](https://www.python.org)
+[![License](https://img.shields.io/github/license/brianoflondon/podping-hivepinger)](LICENSE)
+
 ### Who is this for?
 
 This is for a Podcast Hosting Company which wants to broadcast podping updates without using anyone else's infrastructure (specifically the [Podping Cloud](https://podping.cloud) service run by [Podcasting 2.0](https://podcastindex.org/)).
