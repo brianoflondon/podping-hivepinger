@@ -43,17 +43,44 @@ The script is written without any bash‑4‑specific features, so it works on b
 
 ### On Your Hosting Side
 
-Once the service is running on a local server within your infrastructure, your hosting system should send an HTTP GET request to the `/` endpoint with the required query parameters (`url`, `reason`, and `medium`) whenever a change happens in the feed of one of your customers.  By default the endpoint mirrors the behaviour of the original
+Once the service is running on a local server within your infrastructure, your hosting system should send an HTTP GET request to the `/` endpoint with the required query parameters (`url`, `reason`, and `medium`) whenever a change happens in the feed of one of your customers.
+
+By default (when `detailed_response` is omitted or set to `false`), the endpoint mirrors the behaviour of the original
 [podping.cloud](https://podping.cloud) API and returns a bare text string `Success!` when the request was accepted.
 
 A new optional boolean flag `detailed_response` may be supplied; when set to `true` the response body becomes a JSON object containing the usual `message`, `reason`, `medium` and `url` fields.  This is useful for debugging (the payload will show `"duplicate"` messages for repeated requests, for instance) but is disabled by default to maintain compatibility with existing callers.
 
-Example:
+Example (default behavior, returns plain text `Success!`):
 
 ```bash
 curl -X 'GET' \
   'http://<local-ip-address>:1820/podping/?url=http%3A%2F%2Fexample.com%2Fcustomer.rss&reason=update&medium=podcast' \
   -H 'accept: application/json'
+```
+
+Response:
+
+```
+Success!
+```
+
+Example (detailed response, returns JSON):
+
+```bash
+curl -X 'GET' \
+  'http://<local-ip-address>:1820/podping/?url=http%3A%2F%2Fexample.com%2Fcustomer.rss&reason=update&medium=podcast&detailed_response=true' \
+  -H 'accept: application/json'
+```
+
+Sample response:
+
+```json
+{
+  "message": "enqueued",
+  "reason": "update",
+  "medium": "podcast",
+  "url": "http://example.com/customer.rss"
+}
 ```
 
 ## About the project
