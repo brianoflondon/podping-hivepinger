@@ -27,6 +27,29 @@ services:
     networks:
       - hivepinger-network
 
+  gossip-writer:
+    container_name: gossip-writer
+    image: brianoflondon/gossip-writer:latest
+    init: true
+    restart: unless-stopped
+    stop_grace_period: 30s
+    user: "1000:1000"
+    # No need to expose the port if we're using this via internal docker networking;
+    # the hivepinger service will connect to it directly
+    # ports:
+    #   - "9998:9998"
+    environment:
+      ZMQ_BIND_ADDR: "tcp://0.0.0.0:9998"
+      IROH_SECRET_FILE: "/data/gossip/iroh.key"
+      ARCHIVE_PATH: "/data/gossip/archive.db"
+      IROH_NODE_KEY_FILE: "/data/gossip/iroh_node.key"
+      KNOWN_PEERS_FILE: "/data/gossip/known_peers.txt"
+      TRUSTED_PUBLISHERS_FILE: "/data/gossip/trusted_publishers.txt"
+      BOOTSTRAP_RELAYS: "https://gossipping.org/relays.json"
+    volumes:
+       - ./data:/data/
+    networks:
+      - hivepinger-network
 
 volumes:
   data:
