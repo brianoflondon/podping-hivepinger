@@ -1,6 +1,8 @@
 services:
   podping-hivepinger:
     image: brianoflondon/podping-hivepinger:latest
+    depends_on:
+      - gossip-writer
     container_name: hivepinger
     ports:
       - "${BIND_HOST:-127.0.0.1}:${API_PORT:-1820}:8000"

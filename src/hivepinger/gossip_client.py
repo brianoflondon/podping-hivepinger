@@ -81,6 +81,7 @@ class GossipClient:
     def __init__(self) -> None:
         self._socket = None
         self._context = None
+        self._monitor = None
         self._connected = False
 
     def connect(self, addr: str = "tcp://127.0.0.1:9998") -> bool:
@@ -105,14 +106,50 @@ class GossipClient:
             self._socket.setsockopt(zmq.RCVTIMEO, 0)
             self._socket.setsockopt(zmq.LINGER, 0)
             self._socket.setsockopt(zmq.SNDHWM, 10000)
+
+            # Set up a socket monitor to detect the actual TCP connection
+            monitor_addr = "inproc://gossip-monitor"
+            self._socket.monitor(monitor_addr, zmq.EVENT_CONNECTED | zmq.EVENT_CONNECT_DELAYED)
+            self._monitor = self._context.socket(zmq.PAIR)
+            self._monitor.connect(monitor_addr)
+
             self._socket.connect(addr)
             self._connected = True
-            logging.info(f"Gossip client connected to {addr}")
+            logging.info(f"Gossip client socket created, connecting to {addr}")
+
+            # Wait up to 3 seconds for the TCP connection to be established
+            if self._verify_connection(timeout_ms=3000):
+                logging.info(f"Gossip client TCP connection verified to {addr}")
+            else:
+                logging.warning(
+                    f"Gossip client could not verify TCP connection to {addr} "
+                    "(gossip-writer may not be running yet — will retry on send)"
+                )
+
+            # Clean up monitor
+            self._socket.monitor(None)
+            self._monitor.close()
+            self._monitor = None
+
             return True
         except Exception:
             logging.exception("Failed to connect gossip client")
             self._connected = False
             return False
+
+    def _verify_connection(self, timeout_ms: int = 3000) -> bool:
+        """Poll the socket monitor for a CONNECTED event."""
+        import zmq
+
+        if self._monitor is None:
+            return False
+        if self._monitor.poll(timeout_ms):
+            try:
+                msg = zmq.utils.monitor.recv_monitor_message(self._monitor)
+                return msg["event"] == zmq.EVENT_CONNECTED
+            except Exception:
+                return False
+        return False
 
     @property
     def is_connected(self) -> bool:
