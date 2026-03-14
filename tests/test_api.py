@@ -11,7 +11,7 @@ def client(tmp_path, monkeypatch):
     # tests themselves focus on API behaviour and queue logic, not the
     # Hive client, so we stub these globally for any test using the
     # ``client`` fixture.
-    from hivepinger import api
+    from hivepinger import api, hive_writer
 
     class DummyClient:
         def __init__(self):
@@ -23,7 +23,8 @@ def client(tmp_path, monkeypatch):
     async def noop_send(*args, **kwargs):
         return {}
 
-    monkeypatch.setattr(api, "send_custom_json", noop_send)
+    # both startup and background loop call send_custom_json via hive_writer
+    monkeypatch.setattr(hive_writer, "send_custom_json", noop_send)
 
     db_path = str(tmp_path / "test_api.db")
     app = create_fast_api_app(db_path=db_path)
@@ -171,11 +172,12 @@ def test_startup_event_sets_fail_state(monkeypatch, tmp_path):
     state attributes.
     """
 
-    from hivepinger import api
+    from hivepinger import api, hive_writer
+    from hivepinger.hive_actions import CustomJsonSendError
 
     db_path = str(tmp_path / "test_api.db")
 
-    # patch get_hive_client so we don’t try to parse the dummy key
+    # patch get_hive_client so we don't try to parse the dummy key
     class DummyClient:
         def __init__(self):
             self.rpc = type("R", (), {"url": "http://node"})()
@@ -192,9 +194,9 @@ def test_startup_event_sets_fail_state(monkeypatch, tmp_path):
     )
 
     async def fail_send(*args, **kwargs):
-        raise api.CustomJsonSendError("simulated failure")
+        raise CustomJsonSendError("simulated failure")
 
-    monkeypatch.setattr(api, "send_custom_json", fail_send)
+    monkeypatch.setattr(hive_writer, "send_custom_json", fail_send)
 
     # run through the lifespan to trigger startup actions
     async def _run():
@@ -214,6 +216,8 @@ def test_lifespan_sets_shutdown_event(tmp_path):
 
     db_path = str(tmp_path / "test_api.db")
 
+    from hivepinger import hive_writer
+
     # stub hive client and send so startup ping succeeds
     class DummyClient:
         def __init__(self):
@@ -224,7 +228,7 @@ def test_lifespan_sets_shutdown_event(tmp_path):
     async def noop_send(*args, **kwargs):
         return {}
 
-    api.send_custom_json = noop_send  # type: ignore
+    hive_writer.send_custom_json = noop_send  # type: ignore
 
     app = api.create_fast_api_app(db_path=db_path)
 
@@ -274,7 +278,7 @@ def test_health_priority_over_queue(tmp_path):
 def test_health_handles_queue_error(tmp_path, monkeypatch):
     """If queue.count_pending raises, health returns queue inaccessible."""
 
-    from hivepinger import api
+    from hivepinger import api, hive_writer
 
     db_path = str(tmp_path / "test_api.db")
 
@@ -289,7 +293,7 @@ def test_health_handles_queue_error(tmp_path, monkeypatch):
     async def noop_send(*args, **kwargs):
         return {}
 
-    monkeypatch.setattr(api, "send_custom_json", noop_send)
+    monkeypatch.setattr(hive_writer, "send_custom_json", noop_send)
     app = api.create_fast_api_app(db_path=db_path)
 
     # ensure queue is open normally

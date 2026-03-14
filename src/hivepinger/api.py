@@ -14,17 +14,11 @@ from fastapi.responses import JSONResponse
 
 # absolute import to support running as a script
 from hivepinger import __version__
-from hivepinger.hive_actions import CustomJsonSendError, get_hive_client, send_custom_json
+from hivepinger.gossip_client import GossipClient
+from hivepinger.hive_actions import get_hive_client
+from hivepinger.hive_writer import send_podping_to_hive, send_startup_podping
 from hivepinger.podping_queue import PodpingQueue
-from models.podping import (
-    CURRENT_PODPING_VERSION,
-    HiveOperationId,
-    HiveTrxID,
-    Medium,
-    Podping,
-    Reason,
-    StartupPodping,
-)
+from models.podping import CURRENT_PODPING_VERSION, HiveOperationId, Medium, Podping, Reason
 
 DEFAULT_DB_PATH = "data/podping_queue.db"
 
@@ -33,7 +27,7 @@ DEFAULT_DB_PATH = "data/podping_queue.db"
 # values as desired; new reasons added to the ``Reason`` enum will default to
 # 10 seconds unless overridden here.
 REASON_INTERVALS: dict[str, float] = {
-    Reason.UPDATE.value: 20,
+    Reason.UPDATE.value: 10,
     Reason.LIVE.value: 1,
     Reason.LIVE_END.value: 30,
     Reason.NEW_IRI.value: 60,
@@ -84,47 +78,18 @@ def create_lifespan(
         # attempt to send startup podping while the app is still coming up;
         # any failure simply marks the service unhealthy but does not abort the
         # startup process.
-        try:
-            uuid_str = str(uuid.uuid4())
-            hive_client = get_hive_client(keys=[hive_posting_key], nobroadcast=no_broadcast)
-            rpc_url = hive_client.rpc.url if hive_client and hive_client.rpc else "N/A"
-            if not rpc_url:
-                rpc_url = "N/A"
-                logging.warning("Hive client RPC URL is not available; using 'N/A' in logs")
-            startup_podping = StartupPodping(
-                server_account=hive_account_name,
-                message="Podping HivePinger startup complete",
-                uuid=uuid_str,
-                hive=rpc_url,
-                sessionId=session_id,
-                v=__version__,
-                pinging_app="hivepinger",
-            )
-            startup_op_id = str(HiveOperationId(prefix=podping_prefix, startup=True))
-
-            startup_trx = await send_custom_json(
-                json_data=startup_podping.model_dump(),
-                send_account=hive_account_name,
-                hive_client=hive_client,
-                keys=[hive_posting_key],
-                id=startup_op_id,
-                nobroadcast=no_broadcast,
-            )
-            trx_id = HiveTrxID(trx=startup_trx)
-            rpc_url = hive_client.rpc.url if hive_client and hive_client.rpc else "N/A"
-            logging.info(
-                f"Sent startup podping with uuid={uuid_str} {trx_id.link} {rpc_url=} {no_broadcast=}"
-            )
-            app.state.fail_state = False
-            app.state.fail_reason = ""
-        except CustomJsonSendError as exc:
-            logging.error(f"Startup podping failed: {exc}")
-            app.state.fail_state = True
-            app.state.fail_reason = f"Startup podping error: {exc}"
-        except Exception as exc:
-            logging.exception("Unexpected error sending startup podping")
-            app.state.fail_state = True
-            app.state.fail_reason = f"Startup podping unexpected error: {exc}"
+        hive_client = get_hive_client(keys=[hive_posting_key], nobroadcast=no_broadcast)
+        startup_result = await send_startup_podping(
+            hive_account_name=hive_account_name,
+            hive_posting_key=hive_posting_key,
+            hive_client=hive_client,
+            no_broadcast=no_broadcast,
+            podping_prefix=podping_prefix,
+            session_id=session_id,
+            version=__version__,
+        )
+        app.state.fail_state = not startup_result.success
+        app.state.fail_reason = startup_result.fail_reason
 
         yield
         logging.info("Application shutdown: cleaning up resources")
@@ -313,6 +278,22 @@ async def _serve(
     # reusable client for later batch operations.
     hive_client = get_hive_client(keys=[hive_posting_key], nobroadcast=no_broadcast)
 
+    # optional gossip-writer integration (ZMQ + Cap'n Proto)
+    gossip_enabled = os.getenv("GOSSIP_WRITER_ENABLED", "false").lower() in (
+        "true",
+        "1",
+        "yes",
+    )
+    gossip_client = GossipClient()
+    if gossip_enabled:
+        gossip_addr = os.getenv("GOSSIP_WRITER_ZMQ", "tcp://127.0.0.1:9998")
+        if gossip_client.connect(gossip_addr):
+            logging.info(f"Gossip writer enabled, connected to {gossip_addr}")
+        else:
+            logging.warning("Gossip writer enabled but connection failed")
+    else:
+        logging.info("Gossip writer disabled (set GOSSIP_WRITER_ENABLED=true to enable)")
+
     config = uvicorn.Config(
         fast_api_app,
         host=host,
@@ -425,55 +406,34 @@ async def _serve(
                                 )
                             )
 
-                            try:
-                                trx = await send_custom_json(
-                                    json_data=podping_obj.model_dump(),
-                                    send_account=hive_account_name,
-                                    hive_client=hive_client,
-                                    keys=[hive_posting_key],
-                                    id=json_id,
-                                )
-                                trx_id = HiveTrxID(trx=trx)
-                                rpc_ulr = (
-                                    hive_client.rpc.url
-                                    if hive_client and hive_client.rpc
-                                    else "N/A"
-                                )
-                                fast_api_app.state.fail_state = (
-                                    False  # clear any previous failure state on successful send
-                                )
-                                fast_api_app.state.fail_reason = (
-                                    ""  # clear any previous failure reason on successful send
-                                )
-                                logging.info(
-                                    f"PODPING sent json_id={json_id} count={len(items)} {trx_id.link} {rpc_ulr=}"
-                                )
-                                for item in batch_items:
-                                    await queue.mark_sent(
-                                        item["url"], item["medium"], item["reason"], str(trx_id)
-                                    )
-                                    log_func(f"{trx_id} {item['url']} marked sent")
-                                # successfully sent, now remove from pending
-                                ids_to_remove = [item["id"] for item in batch_items]
-                                await queue.remove_pending(ids_to_remove)
-                            except CustomJsonSendError as ex:
-                                logging.error(
-                                    f"Failed to send podping batch op={json_id} count={len(items)}: {ex}"
-                                )
-                                fast_api_app.state.fail_state = True  # signal unhealthy status
-                                fast_api_app.state.fail_reason = f"CustomJsonSendError: {ex}"
-                                if "RC exhaustion" in str(ex):
-                                    await asyncio.sleep(
-                                        60
-                                    )  # long sleep to allow RC to recover before retrying
-                                continue
+                            result = await send_podping_to_hive(
+                                podping_obj=podping_obj,
+                                json_id=json_id,
+                                hive_account_name=hive_account_name,
+                                hive_client=hive_client,
+                                hive_posting_key=hive_posting_key,
+                                queue=queue,
+                                batch_items=batch_items,
+                                batch_count=len(items),
+                                log_func=log_func,
+                            )
+                            if result.success:
+                                fast_api_app.state.fail_state = False
+                                fast_api_app.state.fail_reason = ""
 
-                            except Exception:
-                                logging.exception(
-                                    "Error sending podping batch — renewing client and continuing"
-                                )
-                                # refresh client and leave items pending
-                                renew_client()
+                                # forward batch to gossip-writer (best-effort)
+                                if gossip_client.is_connected:
+                                    gossip_client.send_podping_writes(
+                                        iris,
+                                        Medium(medium),
+                                        Reason(reason_str),
+                                    )
+                                    gossip_client.drain_replies()
+                            else:
+                                fast_api_app.state.fail_state = True
+                                fast_api_app.state.fail_reason = result.fail_reason
+                                if result.should_renew_client:
+                                    renew_client()
                                 continue
 
                 # housekeeping
@@ -484,7 +444,10 @@ async def _serve(
             await asyncio.sleep(1)
 
     # run server and background loop concurrently
-    await asyncio.gather(server.serve(), background_loop())
+    try:
+        await asyncio.gather(server.serve(), background_loop())
+    finally:
+        gossip_client.close()
     print("Server shutdown complete")
 
 

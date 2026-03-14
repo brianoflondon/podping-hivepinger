@@ -1,7 +1,3 @@
-data/podping_queue.db-wal
-data/podping_queue.db-shm
-data/podping_queue.db
-
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]
@@ -222,6 +218,5 @@ wheels/
 
 # Virtual environments
 .venv
-data/podping_queue.db
-data/podping_queue.db-shm
-data/podping_queue.db-wal
+data/*
+gossip/data/*

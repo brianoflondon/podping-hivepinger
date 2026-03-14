@@ -1,6 +1,6 @@
 [project]
 name = "podping-hivepinger"
-version = "1.1.0"
+version = "1.2.0"
 description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.13"
@@ -14,6 +14,8 @@ dependencies = [
     "pytest>=7.0",
     "httpx>=0.24",
     "aiosqlite>=0.22.1",
+    "pycapnp>=2.2.2",
+    "pyzmq>=27.1.0",
 ]
 
 [dependency-groups]
