@@ -9,6 +9,31 @@ from hivepinger import __version__
 CURRENT_PODPING_VERSION = "1.1"
 
 
+# Capnp ordinals match the @N annotations in podping_medium.capnp from
+# https://github.com/Podcastindex-org/podping-schemas
+_MEDIUM_CAPNP_ORDINALS: dict[str, int] = {
+    "mixed": 0,
+    "podcast": 1,
+    "podcastL": 2,
+    "music": 3,
+    "musicL": 4,
+    "video": 5,
+    "videoL": 6,
+    "film": 7,
+    "filmL": 8,
+    "audiobook": 9,
+    "audiobookL": 10,
+    "newsletter": 11,
+    "newsletterL": 12,
+    "blog": 13,
+    "blogL": 14,
+    "publisher": 15,
+    "publisherL": 16,
+    "course": 17,
+    "courseL": 18,
+}
+
+
 class Medium(StrEnum):
     MIXED = "mixed"
     PODCAST = "podcast"
@@ -30,12 +55,33 @@ class Medium(StrEnum):
     COURSE = "course"
     COURSE_LIVE = "courseL"
 
+    @property
+    def capnp_ordinal(self) -> int:
+        """Return the Cap'n Proto enum ordinal for this medium."""
+        return _MEDIUM_CAPNP_ORDINALS[self.value]
+
+
+# Capnp ordinals match the @N annotations in podping_reason.capnp.
+# NEW_IRI is a hivepinger-only extension not present in the capnp schema;
+# it maps to the "update" ordinal (0) when sent over the gossip wire.
+_REASON_CAPNP_ORDINALS: dict[str, int] = {
+    "update": 0,
+    "live": 1,
+    "liveEnd": 2,
+    "newIRI": 0,  # not in capnp schema; falls back to update
+}
+
 
 class Reason(StrEnum):
     UPDATE = "update"
     LIVE = "live"
     LIVE_END = "liveEnd"
     NEW_IRI = "newIRI"
+
+    @property
+    def capnp_ordinal(self) -> int:
+        """Return the Cap'n Proto enum ordinal for this reason."""
+        return _REASON_CAPNP_ORDINALS[self.value]
 
 
 class Podping(BaseModel):

@@ -1,0 +1,14 @@
+services:
+  gossip-writer:
+    image: podcastindexorg/podcasting20-podping.alpha/gossip-writer:0.1.1
+    init: true
+    restart: unless-stopped
+    stop_grace_period: 30s
+    user: "1000:1000"
+    environment:
+      ZMQ_BIND_ADDR: "tcp://0.0.0.0:9998"
+      IROH_SECRET_FILE: "/data/gossip/iroh.key"
+      ARCHIVE_PATH: "/data/gossip/archive.db"
+      BOOTSTRAP_RELAYS: "https://gossipping.org/relays.json"
+    volumes:
+      - /data/gossip:/data/gossip
