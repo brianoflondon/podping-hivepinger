@@ -27,7 +27,7 @@ DEFAULT_DB_PATH = "data/podping_queue.db"
 # values as desired; new reasons added to the ``Reason`` enum will default to
 # 10 seconds unless overridden here.
 REASON_INTERVALS: dict[str, float] = {
-    Reason.UPDATE.value: 20,
+    Reason.UPDATE.value: 10,
     Reason.LIVE.value: 1,
     Reason.LIVE_END.value: 30,
     Reason.NEW_IRI.value: 60,

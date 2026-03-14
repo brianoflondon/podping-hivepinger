@@ -45,6 +45,7 @@ def register_routes(
             "podping_prefix": podping_prefix,
             "no_broadcast": no_broadcast,
             "documentation": "/docs",
+            "gossip_writer_enabled": getattr(app.state, "gossip_writer_enabled", False),
         }
 
         queue: PodpingQueue  # type: ignore

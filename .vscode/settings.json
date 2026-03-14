@@ -14,11 +14,21 @@
     },
     "cSpell.words": [
         "aiosqlite",
+        "capnp",
+        "capnpy",
+        "celerybeat",
         "Dedup",
         "hivepinger",
         "hivewatcher",
+        "hivewriter",
+        "IROH",
         "lastrowid",
-        "pplt"
+        "Pipfile",
+        "plexo",
+        "pplt",
+        "pycapnp",
+        "serialisation",
+        "Spyder"
     ],
     "python.analysis.extraPaths": [
         "./src"
