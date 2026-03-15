@@ -251,3 +251,7 @@ Options:
   --hive-account-name TEXT  Hive account name (optional)
   --hive-active-key TEXT    Hive active key (optional)
 ```
+
+## Screenshot
+
+This is a view of the HivePinger running alongside the Gossip Writer and sending out a single IRI to both.
