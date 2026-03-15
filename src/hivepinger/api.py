@@ -90,6 +90,11 @@ def create_lifespan(
         )
         app.state.fail_state = not startup_result.success
         app.state.fail_reason = startup_result.fail_reason
+        app.state.gossip_enabled = os.getenv("GOSSIP_WRITER_ENABLED", "false").lower() in (
+            "true",
+            "1",
+            "yes",
+        )
 
         yield
         logging.info("Application shutdown: cleaning up resources")
