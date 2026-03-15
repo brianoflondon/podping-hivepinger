@@ -255,3 +255,5 @@ Options:
 ## Screenshot
 
 This is a view of the HivePinger running alongside the Gossip Writer and sending out a single IRI to both.
+
+![alt text](<hivepinger gossip writer screenshot.png>)
