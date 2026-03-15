@@ -2,7 +2,7 @@
 
 services:
   gossip-writer:
-    container_name: gossip-writer
+    container_name: gossip-writer-alone
     image: brianoflondon/gossip-writer:latest
     init: true
     restart: unless-stopped

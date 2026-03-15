@@ -1,7 +1,7 @@
 # Podping Hivepinger
 
-[![pytest](https://github.com/brianoflondon/podping-hivepinger/actions/workflows/pytest.yml/badge.svg)](https://github.com/brianoflondon/podping-hivepinger/actions/workflows/pytest.yml)
-[![Docker publish](https://github.com/brianoflondon/podping-hivepinger/actions/workflows/docker_publish.yml/badge.svg)](https://github.com/brianoflondon/podping-hivepinger/actions/workflows/docker_publish.yml)
+[![pytest](https://github.com/brianoflondon/podping-hivepinger/actions/workflows/pytest.yaml/badge.svg)](https://github.com/brianoflondon/podping-hivepinger/actions/workflows/pytest.yaml)
+[![Docker publish](https://github.com/brianoflondon/podping-hivepinger/actions/workflows/docker_publish.yaml/badge.svg)](https://github.com/brianoflondon/podping-hivepinger/actions/workflows/docker_publish.yaml)
 [![Docker Pulls](https://img.shields.io/docker/pulls/brianoflondon/podping-hivepinger?color=blue)](https://hub.docker.com/r/brianoflondon/podping-hivepinger)
 [![Python](https://img.shields.io/badge/python-3.11%2B-blue)](https://www.python.org)
 [![License](https://img.shields.io/github/license/brianoflondon/podping-hivepinger)](LICENSE)
@@ -40,6 +40,18 @@ A convenience script `health-check.sh` is included at the project root.
 * Omit the argument and the script will prompt you to choose from the currently running containers.
 
 The script is written without any bash‑4‑specific features, so it works on both Ubuntu and the stock macOS shell (bash 3.2). It simply calls `docker inspect` and formats the `.State.Health` output with `jq` — nothing else is required.
+
+
+#### Experimental Gossip Writer Support
+
+The service can optionally be configured to send podping updates to a local ZeroMQ socket in addition to broadcasting them on the Hive blockchain.  This is intended as an alternate way to send and share podpings alongside Hive.
+
+To start the service with Gossip Writer support enabled, set the `GOSSIP_WRITER_ENABLED` environment variable to `true` (or any truthy value) in your `.env` file or Docker Compose configuration.
+
+```bash
+docker compose -f docker-compose-gossip.yaml up -d
+```
+
 
 ### On Your Hosting Side
 
@@ -119,7 +131,7 @@ tests/
   test_version.py      # validate ``__version__`` lookup logic
 data/                  # SQLite database (created automatically, gitignored)
 Dockerfile             # Multi-stage build with uv
-docker-compose.yml     # Maps ./data:/data for persistent storage
+docker-compose.yaml     # Maps ./data:/data for persistent storage
 pytest.ini             # Test configuration
 pyproject.toml         # Dependencies and project metadata
 ```
