@@ -22,9 +22,17 @@ Regardless of whether you need help with the Hive account, please let me know an
 
 1. Clone the repo and navigate to the project directory.
 2. Copy the `.env.sample` file to `.env` and fill in your Hive account name and Posting Key.
-3. Run Docker Compose: `docker compose up -d`
+3. Run Docker Compose:
+
+```bash
+docker compose up -d
+```
+
 4. Watch the logs with `docker compose logs -f` to see the service start up and process incoming podpings.
 
+```bash
+docker compose logs -f
+```
 
 There are various options which are documented in the `.env.sample` file but the defaults are probably what you need.
 
@@ -46,10 +54,11 @@ The script is written without any bash‑4‑specific features, so it works on b
 
 The service can optionally be configured to send podping updates to a local ZeroMQ socket in addition to broadcasting them on the Hive blockchain.  This is intended as an alternate way to send and share podpings alongside Hive.
 
-To start the service with Gossip Writer support enabled, set the `GOSSIP_WRITER_ENABLED` environment variable to `true` (or any truthy value) in your `.env` file or Docker Compose configuration.
+To start the service with Gossip Writer support enabled, set the `GOSSIP_WRITER_ENABLED` environment variable to `true` (or any truthy value) in your `.env` file or Docker Compose configuration. These are set for you in the Docker Compose file.
 
 ```bash
-docker compose -f docker-compose-gossip.yaml up -d
+cd gossip
+docker compose up -d
 ```
 
 
