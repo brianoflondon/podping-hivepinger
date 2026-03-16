@@ -90,7 +90,7 @@ def create_lifespan(
         )
         app.state.fail_state = not startup_result.success
         app.state.fail_reason = startup_result.fail_reason
-        app.state.gossip_enabled = os.getenv("GOSSIP_WRITER_ENABLED", "false").lower() in (
+        app.state.gossip_writer_enabled = os.getenv("GOSSIP_WRITER_ENABLED", "false").lower() in (
             "true",
             "1",
             "yes",
@@ -284,13 +284,13 @@ async def _serve(
     hive_client = get_hive_client(keys=[hive_posting_key], nobroadcast=no_broadcast)
 
     # optional gossip-writer integration (ZMQ + Cap'n Proto)
-    gossip_enabled = os.getenv("GOSSIP_WRITER_ENABLED", "false").lower() in (
+    gossip_writer_enabled = os.getenv("GOSSIP_WRITER_ENABLED", "false").lower() in (
         "true",
         "1",
         "yes",
     )
     gossip_client = GossipClient()
-    if gossip_enabled:
+    if gossip_writer_enabled:
         gossip_addr = os.getenv("GOSSIP_WRITER_ZMQ", "tcp://127.0.0.1:9998")
         if gossip_client.connect(gossip_addr):
             logging.info(f"Gossip writer enabled, connected to {gossip_addr}")
