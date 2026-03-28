@@ -220,3 +220,4 @@ wheels/
 .venv
 data/*
 gossip/data/*
+gossip/data-listener/*
