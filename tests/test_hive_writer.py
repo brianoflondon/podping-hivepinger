@@ -1,5 +1,7 @@
 """Tests for the extracted hive_writer module."""
 
+import asyncio
+
 import pytest
 
 from hivepinger.hive_actions import CustomJsonSendError
@@ -103,9 +105,53 @@ async def test_send_podping_to_hive_custom_json_error(monkeypatch):
     )
 
     assert result.success is False
-    assert result.should_renew_client is False
+    assert result.should_renew_client is True
     assert "CustomJsonSendError" in result.fail_reason
     # nothing should have been marked sent
+    assert len(queue.marked_sent) == 0
+    assert len(queue.removed_pending) == 0
+
+
+@pytest.mark.asyncio
+async def test_send_podping_to_hive_custom_json_error_rc_exhaustion_does_not_renew(monkeypatch):
+    """RC exhaustion should not trigger Hive client renewal."""
+    from hivepinger import hive_writer
+
+    async def mock_send(**kwargs):
+        raise CustomJsonSendError("Rate limit / RC exhaustion")
+
+    monkeypatch.setattr(hive_writer, "send_custom_json", mock_send)
+
+    async def no_sleep(_seconds):
+        return None
+
+    monkeypatch.setattr(asyncio, "sleep", no_sleep)
+
+    queue = FakeQueue()
+    podping = Podping(
+        version=CURRENT_PODPING_VERSION,
+        medium=Medium.PODCAST,
+        reason=Reason.UPDATE,
+        iris=["https://fail.com"],
+        timestampNs=1,
+        sessionId=42,
+    )
+
+    result = await send_podping_to_hive(
+        podping_obj=podping,
+        json_id="pp_podcast_update",
+        hive_account_name="testaccount",
+        hive_client=FakeHiveClient(),
+        hive_posting_key="5Jxxx",
+        queue=queue,
+        batch_items=[
+            {"id": 1, "url": "https://fail.com", "medium": "podcast", "reason": "update"}
+        ],
+    )
+
+    assert result.success is False
+    assert result.should_renew_client is False
+    assert "CustomJsonSendError" in result.fail_reason
     assert len(queue.marked_sent) == 0
     assert len(queue.removed_pending) == 0
 

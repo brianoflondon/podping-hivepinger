@@ -138,11 +138,29 @@ async def send_podping_to_hive(
 
     except CustomJsonSendError as ex:
         logging.error(f"Failed to send podping batch op={json_id} count={batch_count}: {ex}")
-        if "RC exhaustion" in str(ex):
+        msg = str(ex)
+        if "RC exhaustion" in msg:
             await asyncio.sleep(60)
+            return WriteResult(
+                success=False,
+                should_renew_client=False,
+                fail_reason=f"CustomJsonSendError: {ex}",
+            )
+
+        # For network/DNS/node resolution issues we need a fresh client once the
+        # internet returns; this helps the node selection in nectar get reset.
+        if "Temporary failure in name resolution" in msg or "Name or service not known" in msg:
+            logging.info("Network resolution error detected; requesting Hive client renewal")
+            return WriteResult(
+                success=False,
+                should_renew_client=True,
+                fail_reason=f"CustomJsonSendError: {ex}",
+            )
+
+        # For other RPC errors we also refresh to avoid hanging on stale node state.
         return WriteResult(
             success=False,
-            should_renew_client=False,
+            should_renew_client=True,
             fail_reason=f"CustomJsonSendError: {ex}",
         )
 
