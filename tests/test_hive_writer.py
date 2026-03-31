@@ -1,5 +1,6 @@
 """Tests for the extracted hive_writer module."""
 
+import asyncio
 import pytest
 
 from hivepinger.hive_actions import CustomJsonSendError
@@ -119,6 +120,11 @@ async def test_send_podping_to_hive_custom_json_error_rc_exhaustion_does_not_ren
         raise CustomJsonSendError("Rate limit / RC exhaustion")
 
     monkeypatch.setattr(hive_writer, "send_custom_json", mock_send)
+
+    async def no_sleep(_seconds):
+        return None
+
+    monkeypatch.setattr(asyncio, "sleep", no_sleep)
 
     queue = FakeQueue()
     podping = Podping(
