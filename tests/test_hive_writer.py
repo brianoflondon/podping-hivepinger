@@ -1,6 +1,7 @@
 """Tests for the extracted hive_writer module."""
 
 import asyncio
+
 import pytest
 
 from hivepinger.hive_actions import CustomJsonSendError
