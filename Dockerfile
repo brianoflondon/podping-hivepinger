@@ -5,6 +5,11 @@ COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
 
 WORKDIR /hivepinger
 
+# tools required for uv to fetch git-sourced dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    git \
+  && rm -rf /var/lib/apt/lists/*
+
 # copy dependency metadata first for layer caching
 COPY pyproject.toml uv.lock .python-version ./
 
