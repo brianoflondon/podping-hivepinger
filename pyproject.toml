@@ -1,12 +1,12 @@
 [project]
 name = "podping-hivepinger"
-version = "1.2.4"
+version = "1.2.5"
 description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
     "fastapi>=0.135.1",
-    "hive-nectar>=0.2.14",
+    "hive-nectar @ git+https://github.com/brianoflondon/hive-nectar.git@3ca5ea143070d4b9bfd951d557808d19244221b0",
     "pydantic>=2.12.5",
     "single-source>=0.4.0",
     "typer>=0.24.1",
