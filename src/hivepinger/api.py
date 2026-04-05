@@ -35,7 +35,7 @@ REASON_INTERVALS: dict[str, float] = {
 
 MAX_IRIS_PER_PODPING = 120
 
-RATE_LIMIT_MAX = 90  # calls
+RATE_LIMIT_MAX = 120  # calls
 RATE_LIMIT_PERIOD = 60  # seconds
 
 
