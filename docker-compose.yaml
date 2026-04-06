@@ -10,9 +10,9 @@ services:
       - ./data:/app/data
     env_file:
       - .env
-    environment:
-      - GOSSIP_WRITER_ENABLED=true
-      - GOSSIP_WRITER_ZMQ=tcp://gossip-writer:9998
+#    environment:
+#      - GOSSIP_WRITER_ENABLED=true
+#      - GOSSIP_WRITER_ZMQ=tcp://gossip-writer:9998
     command: []
     # Healthcheck configuration to monitor the API endpoint; adjust the command and parameters as needed
     healthcheck:
