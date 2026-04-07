@@ -150,6 +150,38 @@ def test_rate_limit(client):
         assert resp.status_code == 200
 
 
+def test_no_broadcast_per_request(client):
+    """no_broadcast is stored distinctly so broadcast and no-broadcast
+    requests for the same URL/medium/reason are treated as separate items."""
+
+    params_base = {
+        "url": "https://feeds.example.org/no-broadcast-test/rss",
+        "reason": "update",
+        "medium": "podcast",
+        "detailed_response": True,
+    }
+
+    # First request with no_broadcast=false (default) — should enqueue
+    resp1 = client.get("/", params={**params_base, "no_broadcast": "false"})
+    assert resp1.status_code == 200
+    assert resp1.json()["message"] == "enqueued"
+
+    # Same request again with no_broadcast=false — should be a duplicate
+    resp2 = client.get("/", params={**params_base, "no_broadcast": "false"})
+    assert resp2.status_code == 200
+    assert resp2.json()["message"] == "duplicate"
+
+    # Same URL/medium/reason but no_broadcast=true — should enqueue separately
+    resp3 = client.get("/", params={**params_base, "no_broadcast": "true"})
+    assert resp3.status_code == 200
+    assert resp3.json()["message"] == "enqueued"
+
+    # Repeating the no_broadcast=true request should also be a duplicate
+    resp4 = client.get("/", params={**params_base, "no_broadcast": "true"})
+    assert resp4.status_code == 200
+    assert resp4.json()["message"] == "duplicate"
+
+
 def test_root_validation_error(client):
     response = client.get("/", params={"url": "", "reason": "bad", "medium": "nope"})
     assert response.status_code == 422
