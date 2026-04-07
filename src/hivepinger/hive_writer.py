@@ -115,8 +115,9 @@ async def send_podping_to_hive(
     the caller what recovery action (if any) is needed.
     """
     try:
+        json_data = podping_obj.model_dump(exclude={"no_broadcast"})
         trx = await send_custom_json(
-            json_data=podping_obj.model_dump(),
+            json_data=json_data,
             send_account=hive_account_name,
             hive_client=hive_client,
             keys=[hive_posting_key],

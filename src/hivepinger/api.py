@@ -43,7 +43,6 @@ def create_lifespan(
     db_path: str,
     hive_account_name: str,
     hive_posting_key: str,
-    no_broadcast: bool,
     podping_prefix: str,
     session_id: int,
 ) -> Callable[[FastAPI], AsyncContextManager[Any]]:
@@ -78,12 +77,12 @@ def create_lifespan(
         # attempt to send startup podping while the app is still coming up;
         # any failure simply marks the service unhealthy but does not abort the
         # startup process.
-        hive_client = get_hive_client(keys=[hive_posting_key], nobroadcast=no_broadcast)
+        hive_client = get_hive_client(keys=[hive_posting_key], nobroadcast=False)
         startup_result = await send_startup_podping(
             hive_account_name=hive_account_name,
             hive_posting_key=hive_posting_key,
             hive_client=hive_client,
-            no_broadcast=no_broadcast,
+            no_broadcast=False,
             podping_prefix=podping_prefix,
             session_id=session_id,
             version=__version__,
@@ -117,7 +116,6 @@ def create_fast_api_app(
     session_id: int | None = None,
     hive_account_name: str = "",
     hive_posting_key: str = "",
-    no_broadcast: bool = False,
     podping_prefix: str = "pp",
     verbose: bool = False,
 ) -> FastAPI:
@@ -135,7 +133,6 @@ def create_fast_api_app(
                 db_path,
                 hive_account_name,
                 hive_posting_key,
-                no_broadcast,
                 podping_prefix,
                 session_id,
             ),
@@ -191,7 +188,7 @@ def create_fast_api_app(
 
     # circularity during early application import
 
-    register_routes(fast_api_app, session_id, podping_prefix, no_broadcast, verbose)
+    register_routes(fast_api_app, session_id, podping_prefix, verbose)
 
     return fast_api_app
 
@@ -224,15 +221,6 @@ def serve(
     if not hive_posting_key:
         # get the key from OS .env
         hive_posting_key = os.getenv("HIVE_POSTING_KEY", "")
-    no_broadcast_str = os.getenv("NO_BROADCAST", "false")
-    if no_broadcast_str.lower() in ("true", "1", "yes"):
-        no_broadcast = True
-        logging.warning(
-            "NO_BROADCAST is set to true. Transactions will not be written to Hive (broadcast disabled)."
-        )
-    else:
-        no_broadcast = False
-
     env_verbose = os.getenv("VERBOSE", "false")
     if env_verbose.lower() in ("true", "1", "yes"):
         verbose = True
@@ -242,7 +230,7 @@ def serve(
             "Hive account name or posting key not provided. Hive operations will not be sent."
         )
     logging.info(
-        f"Sending podpings with account={hive_account_name} no_broadcast={no_broadcast} prefix={podping_prefix} verbose={verbose}"
+        f"Sending podpings with account={hive_account_name} prefix={podping_prefix} verbose={verbose}"
     )
     asyncio.run(
         _serve(
@@ -251,7 +239,6 @@ def serve(
             workers,
             hive_account_name,
             hive_posting_key,
-            no_broadcast,
             podping_prefix,
             verbose,
         )
@@ -264,7 +251,6 @@ async def _serve(
     workers: int,
     hive_account_name: str,
     hive_posting_key: str,
-    no_broadcast: bool = False,
     podping_prefix: str = "pp",
     verbose: bool = False,
 ) -> None:
@@ -273,15 +259,15 @@ async def _serve(
         session_id=session_id,
         hive_account_name=hive_account_name,
         hive_posting_key=hive_posting_key,
-        no_broadcast=no_broadcast,
         podping_prefix=podping_prefix,
         verbose=verbose,
     )
 
-    # create a Hive client for use by the background loop; the lifespan
-    # context has already sent its own startup ping, so we just need a
-    # reusable client for later batch operations.
-    hive_client = get_hive_client(keys=[hive_posting_key], nobroadcast=no_broadcast)
+    # create two Hive clients for the background loop: one that broadcasts
+    # (default) and one that skips broadcasting.  Requests arriving with
+    # ``no_broadcast=True`` are routed to the second client.
+    hive_client = get_hive_client(keys=[hive_posting_key], nobroadcast=False)
+    hive_client_no_broadcast = get_hive_client(keys=[hive_posting_key], nobroadcast=True)
 
     # optional gossip-writer integration (ZMQ + Cap'n Proto)
     gossip_writer_enabled = os.getenv("GOSSIP_WRITER_ENABLED", "false").lower() in (
@@ -331,14 +317,15 @@ async def _serve(
         # oldest pending entry and only returns ``True`` once it has been in
         # the queue for the configured interval.
 
-        # helper to build/refresh hive client
+        # helper to build/refresh hive clients
         last_client_creation = time()
 
-        def renew_client():
-            nonlocal hive_client, last_client_creation
-            hive_client = get_hive_client(keys=[hive_posting_key], nobroadcast=no_broadcast)
+        def renew_clients():
+            nonlocal hive_client, hive_client_no_broadcast, last_client_creation
+            hive_client = get_hive_client(keys=[hive_posting_key], nobroadcast=False)
+            hive_client_no_broadcast = get_hive_client(keys=[hive_posting_key], nobroadcast=True)
             logging.info(
-                f"Hive client renewed: {hive_client.rpc.url if hive_client and hive_client.rpc else 'N/A'}"
+                f"Hive clients renewed: {hive_client.rpc.url if hive_client and hive_client.rpc else 'N/A'}"
             )
             last_client_creation = time()
 
@@ -361,85 +348,94 @@ async def _serve(
 
             now = time()
 
-            # recreate client periodically
+            # recreate clients periodically
             if now - last_client_creation > 1800:
-                renew_client()
+                renew_clients()
 
             try:
-                # process each reason according to its configured interval
-                for reason_str, interval in REASON_INTERVALS.items():
-                    # only dequeue a batch when the oldest pending URL for that
-                    # reason has been queued long enough; this allows us to
-                    # accumulate additional URLs that arrive shortly after the
-                    # first one.
-                    if not await queue.ready_to_send(reason_str, interval):
-                        continue
+                # process each no_broadcast mode with its corresponding client
+                for nb_flag in (False, True):
+                    current_client = hive_client_no_broadcast if nb_flag else hive_client
 
-                    # fetch the batch but don't delete yet.  ``all_ids`` will be
-                    # removed only after a successful send.  This prevents loss if
-                    # the downstream transaction fails.
-                    batch, all_ids = await queue.peek_batch(reason=reason_str)
-                    if not batch:
-                        continue
+                    # process each reason according to its configured interval
+                    for reason_str, interval in REASON_INTERVALS.items():
+                        # only dequeue a batch when the oldest pending URL for that
+                        # reason has been queued long enough; this allows us to
+                        # accumulate additional URLs that arrive shortly after the
+                        # first one.
+                        if not await queue.ready_to_send(
+                            reason_str, interval, no_broadcast=nb_flag
+                        ):
+                            continue
 
-                    # group by medium so each op_id has consistent medium/reason
-                    groups: dict[str, list] = {}  # type: ignore
-                    for item in batch:
-                        groups.setdefault(item["medium"], []).append(item)
+                        # fetch the batch but don't delete yet.  ``all_ids`` will be
+                        # removed only after a successful send.  This prevents loss if
+                        # the downstream transaction fails.
+                        batch, all_ids = await queue.peek_batch(
+                            reason=reason_str, no_broadcast=nb_flag
+                        )
+                        if not batch:
+                            continue
 
-                    # split groups.items() into blocks of upto MAX_IRIS_PER_PODPING to avoid hitting Hive's max json size limit;
-                    # this is a simple approach that may result in uneven batches but keeps the implementation straightforward
+                        # group by medium so each op_id has consistent medium/reason
+                        groups: dict[str, list] = {}  # type: ignore
+                        for item in batch:
+                            groups.setdefault(item["medium"], []).append(item)
 
-                    for medium, items in groups.items():
-                        for i in range(0, len(items), MAX_IRIS_PER_PODPING):
-                            batch_items = items[i : i + MAX_IRIS_PER_PODPING]
-                            iris = [item["url"] for item in batch_items]
-                            podping_obj = Podping(
-                                version=CURRENT_PODPING_VERSION,
-                                medium=Medium(medium),
-                                reason=Reason(reason_str),
-                                iris=iris,
-                                timestampNs=int(now * 1e9),
-                                sessionId=session_id,
-                            )
+                        # split groups.items() into blocks of upto MAX_IRIS_PER_PODPING to avoid hitting Hive's max json size limit;
+                        # this is a simple approach that may result in uneven batches but keeps the implementation straightforward
 
-                            json_id = str(
-                                HiveOperationId(
-                                    prefix=podping_prefix,
+                        for medium, items in groups.items():
+                            for i in range(0, len(items), MAX_IRIS_PER_PODPING):
+                                batch_items = items[i : i + MAX_IRIS_PER_PODPING]
+                                iris = [item["url"] for item in batch_items]
+                                podping_obj = Podping(
+                                    version=CURRENT_PODPING_VERSION,
                                     medium=Medium(medium),
                                     reason=Reason(reason_str),
+                                    iris=iris,
+                                    timestampNs=int(now * 1e9),
+                                    sessionId=session_id,
+                                    no_broadcast=nb_flag,
                                 )
-                            )
 
-                            result = await send_podping_to_hive(
-                                podping_obj=podping_obj,
-                                json_id=json_id,
-                                hive_account_name=hive_account_name,
-                                hive_client=hive_client,
-                                hive_posting_key=hive_posting_key,
-                                queue=queue,
-                                batch_items=batch_items,
-                                batch_count=len(items),
-                                log_func=log_func,
-                            )
-                            if result.success:
-                                fast_api_app.state.fail_state = False
-                                fast_api_app.state.fail_reason = ""
-
-                                # forward batch to gossip-writer (best-effort)
-                                if gossip_client.is_connected:
-                                    gossip_client.send_podping_writes(
-                                        iris,
-                                        Medium(medium),
-                                        Reason(reason_str),
+                                json_id = str(
+                                    HiveOperationId(
+                                        prefix=podping_prefix,
+                                        medium=Medium(medium),
+                                        reason=Reason(reason_str),
                                     )
-                                    gossip_client.drain_replies()
-                            else:
-                                fast_api_app.state.fail_state = True
-                                fast_api_app.state.fail_reason = result.fail_reason
-                                if result.should_renew_client:
-                                    renew_client()
-                                continue
+                                )
+
+                                result = await send_podping_to_hive(
+                                    podping_obj=podping_obj,
+                                    json_id=json_id,
+                                    hive_account_name=hive_account_name,
+                                    hive_client=current_client,
+                                    hive_posting_key=hive_posting_key,
+                                    queue=queue,
+                                    batch_items=batch_items,
+                                    batch_count=len(items),
+                                    log_func=log_func,
+                                )
+                                if result.success:
+                                    fast_api_app.state.fail_state = False
+                                    fast_api_app.state.fail_reason = ""
+
+                                    # forward batch to gossip-writer (best-effort)
+                                    if gossip_client.is_connected:
+                                        gossip_client.send_podping_writes(
+                                            iris,
+                                            Medium(medium),
+                                            Reason(reason_str),
+                                        )
+                                        gossip_client.drain_replies()
+                                else:
+                                    fast_api_app.state.fail_state = True
+                                    fast_api_app.state.fail_reason = result.fail_reason
+                                    if result.should_renew_client:
+                                        renew_clients()
+                                    continue
 
                 # housekeeping
                 await queue.purge_old_sent()

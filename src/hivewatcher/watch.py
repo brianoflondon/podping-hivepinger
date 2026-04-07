@@ -8,6 +8,9 @@ matching items onto an ``asyncio.Queue`` so that the main task can remain
 async/await-friendly.  A small helper parameter ``max_ops`` makes testing
 easier by allowing the watcher to exit after a finite number of messages.
 
+Now includes a live function that watches for 3speak broadcasts and sends
+a live real podping for each one.
+
 Usage example (from project root):
 
 ```sh
@@ -28,9 +31,15 @@ from nectar.blockchain import Blockchain
 from nectar.hive import Hive
 from pydantic_core import ValidationError
 
-from models.podping import Podping
+from models.podping import Medium, Podping, Reason
 
 cli = typer.Typer(help="Hive blockchain watcher for custom_json ops")
+
+CALL_URL = "http://localhost:1820/"
+# CALL_URL = "http://yoga-v4vapp:1820/"
+# CALL_URL = "https://hivepinger.podping.org/"
+
+THREESPEAK_PODPING_SEND = True
 
 
 @cli.command()
@@ -40,22 +49,56 @@ def watch(
     max_ops: Optional[int] = typer.Option(
         None, help="Stop after this many matching ops (useful for tests)"
     ),
-):
-    """Start watching the chain for ``custom_json`` operations.
+    threespeak: bool = typer.Option(
+        True,
+        help="Whether to send podpings for 3speak broadcasts (requires CALL_URL to be set to a valid endpoint)",
+    ),
+    all_pings: bool = typer.Option(
+        True,
+        help="Whether to send all podpings on to gossip and no_broadcast them to Hive",
+    ),
+    call_url: str = typer.Option(
+        CALL_URL,
+        help="URL to send test podpings to for 3speak broadcasts (ignored if --threespeak is false)",
+    ),
+    block: int | None = typer.Option(
+        None, help="Start watching from this block number (optional)"
+    ),
+) -> None:
+    """
+    Start watching the chain for ``custom_json`` operations.
 
     ``podping_prefix`` works the same way as the parameter in :mod:`hivepinger.api`.
     The watcher will run indefinitely unless ``max_ops`` is provided, in which
     case the command will exit after collecting that many matching operations.
+    The ``block`` parameter allows starting the watch from a specific block number.
+    The 3speak-related parameters allow the watcher to send test podping requests
+    for 3speak broadcasts, which is primarily for testing purposes and requires a valid endpoint at ``call_url``.
+
     """
 
-    asyncio.run(async_watch(podping_prefix, node=node, max_ops=max_ops))
+    asyncio.run(
+        async_watch(
+            podping_prefix,
+            node=node,
+            max_ops=max_ops,
+            threespeak_podping_send=threespeak,
+            all_pings=all_pings,
+            call_url=call_url,
+            block=block,
+        )
+    )
 
 
 async def async_watch(
     podping_prefix: str,
-    node: Optional[str] = None,
-    hive_client: Optional[Hive] = None,
-    max_ops: Optional[int] = None,
+    node: str | None = None,
+    hive_client: Hive | None = None,
+    max_ops: int | None = None,
+    threespeak_podping_send: bool = True,
+    all_pings: bool = True,
+    call_url: str = CALL_URL,
+    block: int | None = None,
 ) -> None:
     """Internal coroutine which performs the actual watching.
 
@@ -72,6 +115,12 @@ async def async_watch(
     max_ops:
         If not ``None`` the coroutine will return after printing this many
         matching operations.
+    threespeak_podping_send:
+        Whether to send a podping for 3speak broadcasts.  This is primarily for testing since it requires a valid endpoint at ``call_url``.
+    all_pings:
+        Whether to send all podpings on to gossip and no_broadcast them to Hive.  This is primarily for testing to verify the watcher is correctly parsing and sending all valid podpings
+    call_url:
+        URL to send test podping requests to for 3speak broadcasts.
     """
 
     # create or reuse client
@@ -86,9 +135,11 @@ async def async_watch(
         try:
             # ``blockchain.stream`` is blocking; run in its own thread and push matches
             blockchain = Blockchain(hive_client)
-            for op in blockchain.stream(opNames=["custom_json"], raw_ops=False):
+            for op in blockchain.stream(opNames=["custom_json"], raw_ops=False, start=block):
                 op_id = op.get("id", "")
-                if op_id.startswith(podping_prefix):
+                if threespeak_podping_send and op_id == "3speak-publish":
+                    loop.call_soon_threadsafe(queue.put_nowait, op)
+                if all_pings and op_id.startswith(podping_prefix):
                     # schedule adding to queue on the main loop
                     loop.call_soon_threadsafe(queue.put_nowait, op)
         except Exception as exc:  # pragma: no cover - defensive
@@ -106,7 +157,21 @@ async def async_watch(
             # simple output; could be replaced with richer handling later
             try:
                 posting_account = op.get("required_posting_auths", [""])[0]
-                podping = Podping.model_validate(json.loads(op.get("json", "{}")))
+                if op.get("id", "") == "3speak-publish":
+                    c_json = json.loads(op.get("json", "{}"))
+                    author = c_json.get("author", "")
+                    logging.info(f"3speak-publish op: {author}")
+                    podping = Podping(
+                        version="1.1",
+                        medium=Medium.VIDEO,
+                        reason=Reason.UPDATE,
+                        iris=[f"https://legacy.3speak.tv/rss/{author}.xml"],
+                        sessionId=0,
+                        no_broadcast=False,
+                    )
+                else:
+                    podping = Podping.model_validate(json.loads(op.get("json", "{}")))
+                    podping.no_broadcast = True
             except ValidationError as exc:
                 logging.warning(
                     f"received custom_json trx_id {op.get('trx_id', '')} but failed to parse as Podping"
@@ -123,6 +188,8 @@ async def async_watch(
                     medium=podping.medium.value,
                     reason=podping.reason.value,
                     http_client=client,
+                    no_broadcast=podping.no_broadcast or False,
+                    call_url=call_url,
                 )
             count += 1
             if max_ops is not None and count >= max_ops:
@@ -131,17 +198,21 @@ async def async_watch(
 
 
 async def send_test_podping(
-    url: str, medium: str, reason: str, http_client: httpx.AsyncClient
+    url: str,
+    medium: str,
+    reason: str,
+    http_client: httpx.AsyncClient,
+    no_broadcast: bool = True,
+    call_url: str = CALL_URL,
 ) -> None:
     try:
-        params = {
+        params: dict[str, str | bool] = {
             "url": url,
             "reason": reason,
             "medium": medium,
+            "no_broadcast": no_broadcast,
             "detailed_response": True,
         }
-        call_url = "https://hivepinger.podping.org/"
-        # call_url = "http://localhost:1820/"
         response = await http_client.get(call_url, params=params, timeout=1.0)
         response_data = response.json()
         message = response_data.get("message", "failed")
