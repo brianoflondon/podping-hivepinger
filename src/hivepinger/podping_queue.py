@@ -15,11 +15,12 @@ PURGE_SENT_AFTER_SECONDS = 86400  # 24 hours
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS pending_podpings (
-    id          INTEGER PRIMARY KEY AUTOINCREMENT,
-    url         TEXT    NOT NULL,
-    medium      TEXT    NOT NULL,
-    reason      TEXT    NOT NULL,
-    received_at REAL    NOT NULL
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    url          TEXT    NOT NULL,
+    medium       TEXT    NOT NULL,
+    reason       TEXT    NOT NULL,
+    no_broadcast INTEGER NOT NULL DEFAULT 0,
+    received_at  REAL    NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS sent_podpings (
@@ -48,6 +49,13 @@ class PodpingQueue:
         self._db = await aiosqlite.connect(self.db_path)
         await self._db.execute("PRAGMA journal_mode=WAL")
         await self._db.executescript(_SCHEMA)
+        # migrate: add no_broadcast column if missing (pre-existing databases)
+        async with self._db.execute("PRAGMA table_info(pending_podpings)") as cur:
+            cols = {row[1] for row in await cur.fetchall()}
+        if "no_broadcast" not in cols:
+            await self._db.execute(
+                "ALTER TABLE pending_podpings ADD COLUMN no_broadcast INTEGER NOT NULL DEFAULT 0"
+            )
         await self._db.commit()
         pending = await self.count_pending()
         if pending:
@@ -66,7 +74,9 @@ class PodpingQueue:
                 return 0
             return row[0]
 
-    async def enqueue(self, url: HttpUrl, medium: str, reason: str) -> int:
+    async def enqueue(
+        self, url: HttpUrl, medium: str, reason: str, *, no_broadcast: bool = False
+    ) -> int:
         """Insert a URL into the pending queue.
 
         Before inserting we perform deduplication in two places:
@@ -90,6 +100,7 @@ class PodpingQueue:
         assert self._db is not None
         url_str = str(url)
         now = time.time()
+        no_broadcast_int = 1 if no_broadcast else 0
 
         # dedup against sent records. previously we only considered the
         # URL, which meant a rapid pair of ``live``/``liveEnd`` podpings would
@@ -116,8 +127,9 @@ class PodpingQueue:
         # is queued we don't need another copy until the first one is either
         # sent or removed.
         async with self._db.execute(
-            "SELECT 1 FROM pending_podpings WHERE url = ? AND medium = ? AND reason = ? LIMIT 1",
-            (url_str, medium, reason),
+            "SELECT 1 FROM pending_podpings WHERE url = ? AND medium = ? AND reason = ? "
+            "AND no_broadcast = ? LIMIT 1",
+            (url_str, medium, reason, no_broadcast_int),
         ) as cur:
             already = await cur.fetchone()
         if already:
@@ -125,15 +137,19 @@ class PodpingQueue:
             return 0
 
         async with self._db.execute(
-            "INSERT INTO pending_podpings (url, medium, reason, received_at) VALUES (?, ?, ?, ?)",
-            (url_str, medium, reason, now),
+            "INSERT INTO pending_podpings (url, medium, reason, no_broadcast, received_at) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (url_str, medium, reason, no_broadcast_int, now),
         ) as cur:
             row_id = cur.lastrowid
         await self._db.commit()
         return row_id or 0
 
     async def dequeue_batch(
-        self, medium: str | None = None, reason: str | None = None
+        self,
+        medium: str | None = None,
+        reason: str | None = None,
+        no_broadcast: bool | None = None,
     ) -> List[Dict[str, Any]]:
         """Fetch and remove pending items, optionally filtering by medium/reason.
 
@@ -144,19 +160,25 @@ class PodpingQueue:
         operations may fail (because items are lost).
 
         Returns a list of dicts with keys: id, url, medium, reason,
-        received_at.  Items are ordered by insertion id.  Duplicates (within
-        the batch or against recently sent) are dropped silently.
+        no_broadcast, received_at.  Items are ordered by insertion id.
+        Duplicates (within the batch or against recently sent) are dropped
+        silently.
         """
         assert self._db is not None
 
         # delegate to peek_batch and then delete the returned ids
-        to_send, all_ids = await self.peek_batch(medium=medium, reason=reason)
+        to_send, all_ids = await self.peek_batch(
+            medium=medium, reason=reason, no_broadcast=no_broadcast
+        )
         if all_ids:
             await self.remove_pending(all_ids)
         return to_send
 
     async def peek_batch(
-        self, medium: str | None = None, reason: str | None = None
+        self,
+        medium: str | None = None,
+        reason: str | None = None,
+        no_broadcast: bool | None = None,
     ) -> tuple[List[Dict[str, Any]], List[int]]:
         """Return a batch of pending items without deleting them.
 
@@ -170,7 +192,9 @@ class PodpingQueue:
         assert self._db is not None
 
         # build query with optional filters
-        base: str = "SELECT id, url, medium, reason, received_at FROM pending_podpings"
+        base: str = (
+            "SELECT id, url, medium, reason, no_broadcast, received_at FROM pending_podpings"
+        )
         clauses: List[str] = []
         params: List[Any] = []
         if medium is not None:
@@ -179,6 +203,9 @@ class PodpingQueue:
         if reason is not None:
             clauses.append("reason = ?")
             params.append(reason)
+        if no_broadcast is not None:
+            clauses.append("no_broadcast = ?")
+            params.append(1 if no_broadcast else 0)
         if clauses:
             base += " WHERE " + " AND ".join(clauses)
         base += " ORDER BY id"
@@ -191,12 +218,9 @@ class PodpingQueue:
 
         to_send: List[Dict[str, Any]] = []
         all_ids: List[int] = []
-        # previously we only de‑duplicated on ``url`` within a batch; this had
-        # the same flaw as the enqueue logic.  use a tuple of all three fields
-        # so that different reasons/mediums are treated separately.
         seen_in_batch: Set[tuple] = set()
 
-        for row_id, url, medium, reason, received_at in rows:
+        for row_id, url, medium, reason, no_broadcast_val, received_at in rows:
             all_ids.append(row_id)
 
             key = (url, medium, reason)
@@ -213,6 +237,7 @@ class PodpingQueue:
                     "url": url,
                     "medium": medium,
                     "reason": reason,
+                    "no_broadcast": bool(no_broadcast_val),
                     "received_at": received_at,
                 }
             )
@@ -320,7 +345,9 @@ class PodpingQueue:
     # Convenience helpers for background batching logic
     # ------------------------------------------------------------------
 
-    async def oldest_pending(self, reason: str | None = None) -> float | None:
+    async def oldest_pending(
+        self, reason: str | None = None, no_broadcast: bool | None = None
+    ) -> float | None:
         """Return the oldest ``received_at`` timestamp for pending rows.
 
         If ``reason`` is provided, only rows matching that reason are
@@ -330,13 +357,17 @@ class PodpingQueue:
         """
         if self._db is None:
             return None
-        params: tuple[str, ...] = ()
+        clauses: list[str] = []
+        params: list = []
         if reason is not None:
-            query = "SELECT MIN(received_at) FROM pending_podpings WHERE reason = ?"
-            params = (reason,)
-        else:
-            query = "SELECT MIN(received_at) FROM pending_podpings"
-            params = ()
+            clauses.append("reason = ?")
+            params.append(reason)
+        if no_broadcast is not None:
+            clauses.append("no_broadcast = ?")
+            params.append(1 if no_broadcast else 0)
+        query = "SELECT MIN(received_at) FROM pending_podpings"
+        if clauses:
+            query += " WHERE " + " AND ".join(clauses)
 
         try:
             async with self._db.execute(query, params) as cur:
@@ -348,7 +379,9 @@ class PodpingQueue:
             return None
         return row[0]
 
-    async def ready_to_send(self, reason: str, interval: float) -> bool:
+    async def ready_to_send(
+        self, reason: str, interval: float, no_broadcast: bool | None = None
+    ) -> bool:
         """Return ``True`` when a batch for ``reason`` should be dequeued.
 
         This is *independent* of the deduplication logic: we simply look at the
@@ -359,7 +392,7 @@ class PodpingQueue:
         If the database has been closed the helper returns ``False`` so the loop
         can exit gracefully during shutdown.
         """
-        oldest = await self.oldest_pending(reason)
+        oldest = await self.oldest_pending(reason, no_broadcast=no_broadcast)
         if oldest is None:
             return False
         return time.time() - oldest >= interval

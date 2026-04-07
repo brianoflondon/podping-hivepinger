@@ -189,7 +189,6 @@ def test_startup_event_sets_fail_state(monkeypatch, tmp_path):
         db_path=db_path,
         hive_account_name="acct",
         hive_posting_key="key",
-        no_broadcast=False,
         podping_prefix="pp",
     )
 

@@ -13,7 +13,6 @@ def register_routes(
     app: FastAPI,
     session_id: int,
     podping_prefix: str,
-    no_broadcast: bool,
     verbose: bool,
 ) -> None:
     """Attach the health and root endpoints to *app*.
@@ -43,7 +42,7 @@ def register_routes(
             "status": "OK",
             "session_id": session_id,
             "podping_prefix": podping_prefix,
-            "no_broadcast": no_broadcast,
+            "no_broadcast": "per-request (query parameter)",
             "documentation": "/docs",
             "gossip_writer_enabled": getattr(app.state, "gossip_writer_enabled", False),
         }
@@ -120,6 +119,9 @@ def register_routes(
         detailed_response: bool = Query(
             False, description="Whether to include detailed response information"
         ),
+        no_broadcast: bool = Query(
+            False, description="Whether to skip broadcasting the podping (used mostly for testing)"
+        ),
     ) -> Any:
         """
         Handles incoming podping requests by enqueuing the provided URL and associated metadata for background processing.
@@ -131,6 +133,8 @@ def register_routes(
             medium (Medium): The medium for the podping, defaults to Medium.PODCAST.
             detailed_response (bool): Whether to include detailed response information, defaults to False.
                 When False, the response mimics the `podping.cloud` API. When True includes additional fields for debugging and transparency.
+            no_broadcast (bool): Whether to skip broadcasting the podping, defaults to False. This is primarily used for testing purposes
+                to enqueue podpings without sending them.
 
         Returns:
             dict[str, Any] | Response: A dictionary containing the result message, reason, medium, and URL, or a plain text response.
@@ -149,7 +153,7 @@ def register_routes(
 
         # enqueue for background processing
         queue: PodpingQueue = request.app.state.queue
-        row_id = await queue.enqueue(url, medium.value, reason.value)
+        row_id = await queue.enqueue(url, medium.value, reason.value, no_broadcast=no_broadcast)
 
         import logging
 

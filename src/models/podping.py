@@ -101,6 +101,9 @@ class Podping(BaseModel):
         default_factory=lambda: int(time() * 1e9), description="Timestamp in nanoseconds"
     )
     sessionId: int = Field(0, description="Session ID associated with the podping")
+    no_broadcast: bool | None = Field(
+        False, description="Whether this podping should not be broadcast to the gossip network"
+    )
 
 
 class StartupPodping(BaseModel):

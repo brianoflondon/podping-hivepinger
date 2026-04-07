@@ -10,7 +10,11 @@
             "console": "integratedTerminal",
             "args": [
                 "--podping-prefix",
-                "pp"
+                "pp",
+                "--threespeak",
+                "--no-all-pings",
+                "--call-url",
+                "http://localhost:1820/"
             ],
             "env": {
                 "PYTHONPATH": "${workspaceFolder}/src"
@@ -29,7 +33,7 @@
                 "--port",
                 "1820",
                 "--podping-prefix",
-                "pplt"
+                "pp"
             ],
             "env": {
                 "PYTHONPATH": "${workspaceFolder}/src"
