@@ -138,7 +138,6 @@ async def async_watch(
             for op in blockchain.stream(opNames=["custom_json"], raw_ops=False, start=block):
                 op_id = op.get("id", "")
                 if threespeak_podping_send and op_id == "3speak-publish":
-                    logging.info(f"3speak-publish op: {op.get('')}")
                     loop.call_soon_threadsafe(queue.put_nowait, op)
                 if all_pings and op_id.startswith(podping_prefix):
                     # schedule adding to queue on the main loop
