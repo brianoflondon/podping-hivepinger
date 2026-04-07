@@ -61,12 +61,20 @@ def watch(
         CALL_URL,
         help="URL to send test podpings to for 3speak broadcasts (ignored if --threespeak is false)",
     ),
-):
-    """Start watching the chain for ``custom_json`` operations.
+    block: int | None = typer.Option(
+        None, help="Start watching from this block number (optional)"
+    ),
+) -> None:
+    """
+    Start watching the chain for ``custom_json`` operations.
 
     ``podping_prefix`` works the same way as the parameter in :mod:`hivepinger.api`.
     The watcher will run indefinitely unless ``max_ops`` is provided, in which
     case the command will exit after collecting that many matching operations.
+    The ``block`` parameter allows starting the watch from a specific block number.
+    The 3speak-related parameters allow the watcher to send test podping requests
+    for 3speak broadcasts, which is primarily for testing purposes and requires a valid endpoint at ``call_url``.
+
     """
 
     asyncio.run(
@@ -77,6 +85,7 @@ def watch(
             threespeak_podping_send=threespeak,
             all_pings=all_pings,
             call_url=call_url,
+            block=block,
         )
     )
 
@@ -89,6 +98,7 @@ async def async_watch(
     threespeak_podping_send: bool = True,
     all_pings: bool = True,
     call_url: str = CALL_URL,
+    block: int | None = None,
 ) -> None:
     """Internal coroutine which performs the actual watching.
 
@@ -125,7 +135,7 @@ async def async_watch(
         try:
             # ``blockchain.stream`` is blocking; run in its own thread and push matches
             blockchain = Blockchain(hive_client)
-            for op in blockchain.stream(opNames=["custom_json"], raw_ops=False, start=105308498):
+            for op in blockchain.stream(opNames=["custom_json"], raw_ops=False, start=block):
                 op_id = op.get("id", "")
                 if threespeak_podping_send and op_id == "3speak-publish":
                     logging.info(f"3speak-publish op: {op.get('')}")
