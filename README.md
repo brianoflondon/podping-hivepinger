@@ -22,7 +22,7 @@ Regardless of whether you need help with the Hive account, please let me know an
 
 1. Clone the repo and navigate to the project directory.
 2. Copy the `.env.sample` file to `.env` and fill in your Hive account name and Posting Key.
-3. Run Docker Compose:
+3. Run Docker Compose for the API service only:
 
 ```bash
 docker compose up -d
@@ -34,11 +34,24 @@ docker compose up -d
 docker compose logs -f
 ```
 
+If you want to run the Hive watcher separately, use the compose file in the `hivewatcher/` folder instead of the root compose file:
+
+```bash
+cd hivewatcher
+docker compose up -d
+```
+
+See `hivewatcher/README.md` for watcher-specific details, including 3speak rebroadcast handling and `CALL_URL` configuration.
+
+```bash
+docker compose logs -f
+```
+
 There are various options which are documented in the `.env.sample` file but the defaults are probably what you need.
 
 Verbose logging is turned off but if you want a log of every podcast url which is sent to the service, you can set `VERBOSE=true` in the `.env` file.
 
-The system runs a FastAPI server and you can see the health of the system at any time by visiting `http://<your-server-ip>:1820/health` or `http://<your-server-ip>:1820/status`.
+The system runs a FastAPI server and you can see the health of the service at any time by visiting `http://<your-server-ip>:1820/health` or `http://<your-server-ip>:1820/status`.
 
 ### Health‑check helper script
 
@@ -64,10 +77,12 @@ docker compose up -d
 
 ### On Your Hosting Side
 
-Once the service is running on a local server within your infrastructure, your hosting system should send an HTTP GET request to the `/` endpoint with the required query parameters (`url`, `reason`, and `medium`) whenever a change happens in the feed of one of your customers.
+Once the service is running on a local server within your infrastructure, your hosting system should send an HTTP GET request to the `/` endpoint with the required query parameters (`url`, `reason`, `medium`, and optionally `no_broadcast`) whenever a change happens in the feed of one of your customers.
 
 By default (when `detailed_response` is omitted or set to `false`), the endpoint mirrors the behaviour of the original
-[podping.cloud](https://podping.cloud) API and returns a bare text string `Success!` when the request was accepted.
+[podping.cloud](https://podping.cloud) API and returns a bare text string `Success!` when the request is accepted.
+
+The optional boolean `no_broadcast` parameter controls whether the request is queued for normal Hive broadcast processing or stored as a no-broadcast item. This is useful for testing or when the same URL should be treated separately from broadcast traffic.
 
 A new optional boolean flag `detailed_response` may be supplied; when set to `true` the response body becomes a JSON object containing the usual `message`, `reason`, `medium` and `url` fields.  This is useful for debugging (the payload will show `"duplicate"` messages for repeated requests, for instance) but is disabled by default to maintain compatibility with existing callers.
 
@@ -90,6 +105,22 @@ Example (detailed response, returns JSON):
 ```bash
 curl -X 'GET' \
   'http://<local-ip-address>:1820/podping/?url=http%3A%2F%2Fexample.com%2Fcustomer.rss&reason=update&medium=podcast&detailed_response=true' \
+  -H 'accept: application/json'
+```
+
+Example request with `no_broadcast=false` (default broadcast flow):
+
+```bash
+curl -X 'GET' \
+  'http://<local-ip-address>:1820/podping/?url=http%3A%2F%2Fexample.com%2Fcustomer.rss&reason=update&medium=podcast&no_broadcast=false' \
+  -H 'accept: application/json'
+```
+
+Example request with `no_broadcast=true` (no-broadcast queue entry):
+
+```bash
+curl -X 'GET' \
+  'http://<local-ip-address>:1820/podping/?url=http%3A%2F%2Fexample.com%2Fcustomer.rss&reason=update&medium=podcast&no_broadcast=true' \
   -H 'accept: application/json'
 ```
 
@@ -119,7 +150,7 @@ Built with **uv** for package management, **Typer** for the CLI, and **aiosqlite
 - **Background processing loop** — every 10 seconds the queue is inspected and eligible batches are sent; the above interval controls eligibility rather than the loop period itself
 - **Sent history with `trx_id`** — processed items are recorded with their Hive transaction ID; history is purged after 24 hours
 - **Crash recovery** — pending items survive process restarts; on startup the queue reports how many items were carried over
-- **Typer CLI** — `python src/hivepinger/api.py --host 0.0.0.0 --port 1820` runs both the FastAPI server and the background loop concurrently via `asyncio.gather`
+- **Typer CLI** — `python src/hivepinger/api.py serve --host 0.0.0.0 --port 1820` runs both the FastAPI server and the background loop concurrently via `asyncio.gather`
 - **Health endpoints** — `GET /health` and `GET /status` return version and server info
 - **Reverse proxy support** — middleware trusts `X-Forwarded-Proto` and `X-Forwarded-Host` headers
 - **Structured logging** — timestamps, module name, and line numbers in every log line
@@ -140,7 +171,7 @@ tests/
   test_version.py      # validate ``__version__`` lookup logic
 data/                  # SQLite database (created automatically, gitignored)
 Dockerfile             # Multi-stage build with uv
-docker-compose.yaml     # Maps ./data:/data for persistent storage
+docker-compose.yaml     # Maps ./data:/hivepinger/data for persistent storage
 pytest.ini             # Test configuration
 pyproject.toml         # Dependencies and project metadata
 ```
@@ -153,12 +184,26 @@ pyproject.toml         # Dependencies and project metadata
 # install dependencies (creates/upgrades .venv)
 uv sync
 
-# run via the Typer CLI (starts FastAPI + background loop)
-uv run python src/hivepinger/api.py --host 0.0.0.0 --port 1820
+# run the API + background loop via the Typer CLI
+uv run python src/hivepinger/api.py serve --host 0.0.0.0 --port 1820
 
 # or run FastAPI alone with uvicorn (no background loop)
 uv run uvicorn app.api:app --reload --host 0.0.0.0 --port 1820
 ```
+
+### CLI startup parameters
+
+The API service supports the following runtime options when started with the `serve` command:
+
+- `--host`: interface to bind the server to (default: `0.0.0.0`)
+- `--port`: port to listen on (default: `8000` for container runtime, `1820` for local development)
+- `--workers`: number of Uvicorn worker processes
+- `--hive-account-name`: Hive account name for signing transactions
+- `--hive-posting-key`: Hive posting key for signing transactions
+- `--podping-prefix`: Hive operation prefix used when generating broadcast IDs
+- `--verbose` / `-v`: enable verbose logging
+
+The API endpoint accepts the optional query parameter `no_broadcast=true|false` for each request. When set to `true`, the request is enqueued as a no-broadcast item and is handled separately from normal broadcast traffic.
 
 ### VS Code debugging
 

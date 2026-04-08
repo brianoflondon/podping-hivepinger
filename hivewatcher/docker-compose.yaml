@@ -1,0 +1,21 @@
+version: '3.9'
+
+services:
+  hivewatcher:
+    build:
+      context: ..
+      dockerfile: ../Dockerfile
+    image: brianoflondon/podping-hivepinger:latest
+    container_name: hivewatcher
+    command: ["python", "-m", "hivewatcher.watch", "watch", "--podping-prefix", "pp"]
+    env_file:
+      - ../.env
+    environment:
+      CALL_URL: "http://host.docker.internal:${API_PORT:-1820}/"
+    restart: unless-stopped
+    networks:
+      - hivepinger-network
+
+networks:
+  hivepinger-network:
+    driver: bridge
