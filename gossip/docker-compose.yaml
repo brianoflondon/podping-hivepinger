@@ -37,7 +37,7 @@ services:
       - ./data-listener:/data
 
   hivepinger:
-    image: brianoflondon/podping-hivepinger:pr-8
+    image: brianoflondon/podping-hivepinger:latest
     depends_on:
       - gossip-writer
     container_name: hivepinger

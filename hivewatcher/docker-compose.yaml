@@ -1,9 +1,9 @@
 services:
   hivewatcher:
-    # image: brianoflondon/podping-hivepinger:pr-8
-    build:
-      context: ..
-      dockerfile: Dockerfile
+    image: brianoflondon/podping-hivepinger:latest
+    # build:
+    #   context: ..
+    #   dockerfile: Dockerfile
     container_name: hivewatcher
     command: ["python", "src/hivewatcher/watch.py", "--no-all-pings", "--podping-prefix", "pp", "--call-url", "http://hivepinger:8000/"]
     restart: unless-stopped
