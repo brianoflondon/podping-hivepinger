@@ -5,7 +5,6 @@ services:
     init: true
     restart: unless-stopped
     stop_grace_period: 30s
-    user: "1000:1000"
     # No need to expose the port if we're using this via internal docker networking;
     # the hivepinger service will connect to it directly
     # ports:
@@ -47,7 +46,7 @@ services:
     volumes:
       # persist the SQLite queue database on the host; the application writes
       # to /app/data by default, so mirror that path rather than /data
-      - ./data:data
+      - ./data:/app/data
     env_file:
       - .env
     command: ["python", "src/hivepinger/api.py"]

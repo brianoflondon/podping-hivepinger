@@ -2,7 +2,7 @@ services:
   hivewatcher:
     image: brianoflondon/podping-hivepinger:pr-8
     container_name: hivewatcher
-    command: ["python", "src/hivewatcher/watch.py", "--all-pings", "--podping-prefix", "pp", "--call-url", "http://hivepinger:8000/"]
+    command: ["python", "src/hivewatcher/watch.py", "--no-all-pings", "--podping-prefix", "pp", "--call-url", "http://hivepinger:8000/"]
     restart: unless-stopped
     networks:
       - hivepinger-network

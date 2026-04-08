@@ -49,6 +49,7 @@ LATEST_BLOCK_FILE = DATA_DIR / "latest_block_num.json"
 
 
 def ensure_latest_block_file() -> None:
+    logging.info(f"Ensuring latest block file exists at {LATEST_BLOCK_FILE}")
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     try:
         LATEST_BLOCK_FILE.touch(exist_ok=True)
