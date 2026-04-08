@@ -45,8 +45,4 @@ RUN mkdir -p /hivepinger/data
 
 EXPOSE 8000
 
-# run the API script; any arguments (host/port/prefix, etc.)
-# are supplied by the caller (docker-compose or `docker run`).
-ENTRYPOINT ["python", "src/hivepinger/api.py"]
-# default to nothing, let caller set options
-CMD []
+# runtime command is supplied by Docker Compose or `docker run`

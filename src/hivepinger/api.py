@@ -77,18 +77,26 @@ def create_lifespan(
         # attempt to send startup podping while the app is still coming up;
         # any failure simply marks the service unhealthy but does not abort the
         # startup process.
-        hive_client = get_hive_client(keys=[hive_posting_key], nobroadcast=False)
-        startup_result = await send_startup_podping(
-            hive_account_name=hive_account_name,
-            hive_posting_key=hive_posting_key,
-            hive_client=hive_client,
-            no_broadcast=False,
-            podping_prefix=podping_prefix,
-            session_id=session_id,
-            version=__version__,
-        )
-        app.state.fail_state = not startup_result.success
-        app.state.fail_reason = startup_result.fail_reason
+        hive_client = None
+        try:
+            hive_client = get_hive_client(keys=[hive_posting_key], nobroadcast=False)
+        except Exception as exc:
+            logging.exception("Failed to create Hive client during startup")
+            app.state.fail_state = True
+            app.state.fail_reason = f"Hive startup client initialization failed: {exc}"
+
+        if hive_client is not None:
+            startup_result = await send_startup_podping(
+                hive_account_name=hive_account_name,
+                hive_posting_key=hive_posting_key,
+                hive_client=hive_client,
+                no_broadcast=False,
+                podping_prefix=podping_prefix,
+                session_id=session_id,
+                version=__version__,
+            )
+            app.state.fail_state = not startup_result.success
+            app.state.fail_reason = startup_result.fail_reason
         app.state.gossip_writer_enabled = os.getenv("GOSSIP_WRITER_ENABLED", "false").lower() in (
             "true",
             "1",
@@ -266,8 +274,13 @@ async def _serve(
     # create two Hive clients for the background loop: one that broadcasts
     # (default) and one that skips broadcasting.  Requests arriving with
     # ``no_broadcast=True`` are routed to the second client.
-    hive_client = get_hive_client(keys=[hive_posting_key], nobroadcast=False)
-    hive_client_no_broadcast = get_hive_client(keys=[hive_posting_key], nobroadcast=True)
+    hive_client = None
+    hive_client_no_broadcast = None
+    try:
+        hive_client = get_hive_client(keys=[hive_posting_key], nobroadcast=False)
+        hive_client_no_broadcast = get_hive_client(keys=[hive_posting_key], nobroadcast=True)
+    except Exception:
+        logging.exception("Failed to create initial Hive clients; background loop will retry")
 
     # optional gossip-writer integration (ZMQ + Cap'n Proto)
     gossip_writer_enabled = os.getenv("GOSSIP_WRITER_ENABLED", "false").lower() in (
@@ -329,6 +342,33 @@ async def _serve(
             )
             last_client_creation = time()
 
+        async def ensure_hive_clients() -> bool:
+            nonlocal last_client_creation
+            now = time()
+            client_refresh_needed = (
+                hive_client is None
+                or hive_client_no_broadcast is None
+                or now - last_client_creation > 1800
+            )
+            if client_refresh_needed:
+                try:
+                    renew_clients()
+                    fast_api_app.state.fail_state = False
+                    fast_api_app.state.fail_reason = ""
+                except Exception as exc:
+                    logging.exception(
+                        "Failed to create or renew Hive clients; will retry after pause"
+                    )
+                    fast_api_app.state.fail_state = True
+                    fast_api_app.state.fail_reason = f"Hive client creation failed: {exc}"
+                    # if no clients are available at all, pause before retrying
+                    if hive_client is None or hive_client_no_broadcast is None:
+                        last_client_creation = time() - (1800 - 60)
+                        return False
+                    # keep using existing clients until the next retry
+                    last_client_creation = time() - (1800 - 60)
+            return True
+
         log_func = logging.info if verbose else logging.debug
         log_func("background_loop: checking for pending podpings to send")
 
@@ -348,9 +388,9 @@ async def _serve(
 
             now = time()
 
-            # recreate clients periodically
-            if now - last_client_creation > 1800:
-                renew_clients()
+            if not await ensure_hive_clients():
+                await asyncio.sleep(60)
+                continue
 
             try:
                 # process each no_broadcast mode with its corresponding client

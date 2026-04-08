@@ -23,6 +23,7 @@ import asyncio
 import json
 import logging
 import threading
+from pathlib import Path
 from typing import Any, Dict, Optional
 
 import httpx
@@ -39,7 +40,56 @@ CALL_URL = "http://localhost:1820/"
 # CALL_URL = "http://yoga-v4vapp:1820/"
 # CALL_URL = "https://hivepinger.podping.org/"
 
+LOG_INTERVAL = 100           # log every 100 blocks (roughly every 5 minutes with 3s block times)
+LOG_BLOCK_NUM_INTERVAL = 20  # 3 seconds blocks means every 60 seconds of persistence/logging
 THREESPEAK_PODPING_SEND = True
+
+DATA_DIR = Path("data")
+LATEST_BLOCK_FILE = DATA_DIR / "latest_block_num.json"
+
+
+def ensure_latest_block_file() -> None:
+    logging.info(f"Ensuring latest block file exists at {LATEST_BLOCK_FILE}")
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    try:
+        LATEST_BLOCK_FILE.touch(exist_ok=True)
+        with LATEST_BLOCK_FILE.open("a", encoding="utf-8"):
+            pass
+    except OSError as exc:
+        raise RuntimeError(
+            f"Unable to create or write {LATEST_BLOCK_FILE}: {exc}"
+        ) from exc
+
+
+def read_latest_block_num() -> Optional[int]:
+    if not LATEST_BLOCK_FILE.exists():
+        return None
+    try:
+        data = json.loads(LATEST_BLOCK_FILE.read_text(encoding="utf-8"))
+        block_num = data.get("block_num")
+        if isinstance(block_num, int):
+            return block_num
+        return None
+    except (OSError, json.JSONDecodeError, TypeError, ValueError):
+        logging.warning(
+            "Could not read latest block number from %s; ignoring persisted block file",
+            LATEST_BLOCK_FILE,
+        )
+        return None
+
+
+def write_latest_block_num(block_num: int) -> None:
+    try:
+        LATEST_BLOCK_FILE.write_text(
+            json.dumps({"block_num": block_num}) + "\n",
+            encoding="utf-8",
+        )
+    except OSError as exc:
+        logging.warning(
+            "Unable to write latest block number to %s: %s",
+            LATEST_BLOCK_FILE,
+            exc,
+        )
 
 
 @cli.command()
@@ -99,6 +149,7 @@ async def async_watch(
     all_pings: bool = True,
     call_url: str = CALL_URL,
     block: int | None = None,
+    retry_delay: float = 5.0,
 ) -> None:
     """Internal coroutine which performs the actual watching.
 
@@ -121,34 +172,69 @@ async def async_watch(
         Whether to send all podpings on to gossip and no_broadcast them to Hive.  This is primarily for testing to verify the watcher is correctly parsing and sending all valid podpings
     call_url:
         URL to send test podping requests to for 3speak broadcasts.
+    retry_delay:
+        Number of seconds to wait before attempting to reconnect after a stream failure.
     """
 
-    # create or reuse client
-    if hive_client is None:
-        hive_client = Hive(node=[node] if node else None)
+    ensure_latest_block_file()
+    persisted_block = read_latest_block_num()
+    if block is None and persisted_block is not None:
+        logging.info(
+            f"Resuming from persisted block {persisted_block}; starting at next block"
+        )
+        block = persisted_block + 1
 
     queue: asyncio.Queue[Dict[str, Any]] = asyncio.Queue()
     loop = asyncio.get_running_loop()
+    stop_event = threading.Event()
 
     def _producer() -> None:
         logging.info("producer thread starting")
-        try:
-            # ``blockchain.stream`` is blocking; run in its own thread and push matches
-            blockchain = Blockchain(hive_client)
-            for op in blockchain.stream(opNames=["custom_json"], raw_ops=False, start=block):
-                op_id = op.get("id", "")
-                if threespeak_podping_send and op_id == "3speak-publish":
-                    loop.call_soon_threadsafe(queue.put_nowait, op)
-                if all_pings and op_id.startswith(podping_prefix):
-                    # schedule adding to queue on the main loop
-                    loop.call_soon_threadsafe(queue.put_nowait, op)
-        except Exception as exc:  # pragma: no cover - defensive
-            logging.exception("streaming thread raised an exception: %s", exc)
+        while not stop_event.is_set():
+            try:
+                current_hive_client = (
+                    hive_client if hive_client is not None else Hive(node=[node] if node else None)
+                )
+                blockchain = Blockchain(current_hive_client)
+                # ``blockchain.stream`` is blocking; run in its own thread and push matches
+                if block is None:
+                    last_block = blockchain.get_current_block()
+                    last_block_num = last_block.block_num
+                else:
+                    last_block_num = block - 1
+                logging.info(f"Starting blockchain stream from block {block if block is not None else last_block_num}")
+                for op in blockchain.stream(opNames=["custom_json"], raw_ops=False, start=block):
+                    op_id = op.get("id", "")
+                    op_block = op.get("block_num", 0)
+                    if op_block > last_block_num:
+                        if op_block % LOG_INTERVAL == 0:
+                            logging.info(f"Processing block {op_block}")
+                        last_block_num = op_block
+                        if op_block % LOG_BLOCK_NUM_INTERVAL == 0:
+                            write_latest_block_num(last_block_num)
+                    if threespeak_podping_send and op_id == "3speak-publish":
+                        loop.call_soon_threadsafe(queue.put_nowait, op)
+                    if all_pings and op_id.startswith(podping_prefix):
+                        loop.call_soon_threadsafe(queue.put_nowait, op)
+                logging.info("blockchain stream ended normally")
+                if stop_event.is_set():
+                    break
+                if retry_delay <= 0:
+                    break
+                logging.info("reconnecting in %s seconds", retry_delay)
+            except Exception as exc:  # pragma: no cover - defensive
+                logging.exception(
+                    "streaming thread raised an exception; reconnecting in %s seconds: %s",
+                    retry_delay,
+                    exc,
+                )
+            if stop_event.wait(retry_delay):
+                break
 
     thread = threading.Thread(target=_producer, daemon=True)
     thread.start()
 
-    logging.info("watching for prefix %r", podping_prefix)
+    logging.info(f"watching for prefix {podping_prefix!r}")
 
     count = 0
     async with httpx.AsyncClient() as client:
@@ -194,6 +280,7 @@ async def async_watch(
             count += 1
             if max_ops is not None and count >= max_ops:
                 logging.info("received %d ops; exiting", count)
+                stop_event.set()
                 break
 
 

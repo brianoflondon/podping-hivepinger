@@ -221,3 +221,4 @@ wheels/
 data/*
 gossip/data/*
 gossip/data-listener/*
+hivewatcher/data/*

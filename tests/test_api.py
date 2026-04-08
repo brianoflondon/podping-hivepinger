@@ -242,6 +242,37 @@ def test_startup_event_sets_fail_state(monkeypatch, tmp_path):
     assert "simulated failure" in app.state.fail_reason
 
 
+def test_startup_client_failure_marks_fail_state_without_crash(monkeypatch, tmp_path):
+    """If Hive client construction fails during startup, the app should stay up."""
+
+    from hivepinger import api
+
+    db_path = str(tmp_path / "test_api.db")
+
+    def failing_get_client(*args, **kwargs):
+        raise RuntimeError("DNS failure")
+
+    monkeypatch.setattr(api, "get_hive_client", failing_get_client)
+
+    app = api.create_fast_api_app(
+        db_path=db_path,
+        hive_account_name="acct",
+        hive_posting_key="key",
+        podping_prefix="pp",
+    )
+
+    async def _run():
+        async with app.router.lifespan_context(app):
+            pass
+
+    import asyncio
+
+    asyncio.run(_run())
+
+    assert app.state.fail_state is True
+    assert "DNS failure" in app.state.fail_reason
+
+
 def test_lifespan_sets_shutdown_event(tmp_path):
     from hivepinger import api
 
