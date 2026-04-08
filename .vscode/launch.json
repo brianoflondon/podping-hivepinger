@@ -1,7 +1,7 @@
 {
     "version": "0.2.0",
     "configurations": [
-        
+
         {
             "name": "Watch",
             "type": "debugpy",
@@ -13,11 +13,11 @@
                 "--podping-prefix",
                 "pp",
                 "--threespeak",
-                "--all-pings",
+                "--no-all-pings",
                 "--call-url",
                 "http://localhost:1820/",
                 // "--block",
-                // "105209573"
+                // "105327249"
             ],
             "env": {
                 "PYTHONPATH": "${workspaceFolder}/src"
