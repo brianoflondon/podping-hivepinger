@@ -18,7 +18,7 @@ services:
       KNOWN_PEERS_FILE: "/data/gossip/known_peers.txt"
       TRUSTED_PUBLISHERS_FILE: "/data/gossip/trusted_publishers.txt"
       BOOTSTRAP_RELAYS: "https://gossipping.org/relays.json"
-      NODE_FRIENDLY_NAME: brian-of-london-yoga-write
+      NODE_FRIENDLY_NAME: "${GOSSIP_FRIENDLY_NAME:-hivepinger-}write"
     volumes:
        - ./data:/data/
     networks:
@@ -33,12 +33,15 @@ services:
       KNOWN_PEERS_FILE: /data/gossip_listener_known_peers.txt
       TRUSTED_PUBLISHERS_FILE: /data/trusted_publishers.txt
       DHT_INITIAL_SECRET: podping_gossip_default_secret
-      NODE_FRIENDLY_NAME: brian-of-london-yoga-listen
+      NODE_FRIENDLY_NAME: "${GOSSIP_FRIENDLY_NAME:-hivepinger-}listen"
     volumes:
       - ./data-listener:/data
 
   hivepinger:
-    image: brianoflondon/podping-hivepinger:latest
+    # image: brianoflondon/podping-hivepinger:latest
+    build:
+      context: ..
+      dockerfile: Dockerfile
     depends_on:
       - gossip-writer
     container_name: hivepinger
@@ -50,10 +53,7 @@ services:
       - ./data:/app/data
     env_file:
       - .env
-    environment:
-      - GOSSIP_WRITER_ENABLED=true
-      - GOSSIP_WRITER_ZMQ=tcp://gossip-writer:9998
-    command: []
+    command: ["python", "src/hivepinger/api.py"]
     # Healthcheck configuration to monitor the API endpoint; adjust the command and parameters as needed
     healthcheck:
       test: ["CMD", "python", "src/health_check.py"]
