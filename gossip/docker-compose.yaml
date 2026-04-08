@@ -47,7 +47,7 @@ services:
     volumes:
       # persist the SQLite queue database on the host; the application writes
       # to /app/data by default, so mirror that path rather than /data
-      - ./data:/app/data
+      - ./data:data
     env_file:
       - .env
     command: ["python", "src/hivepinger/api.py"]
