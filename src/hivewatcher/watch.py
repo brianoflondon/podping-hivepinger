@@ -134,7 +134,9 @@ async def async_watch(
         logging.info("producer thread starting")
         while not stop_event.is_set():
             try:
-                current_hive_client = hive_client if hive_client is not None else Hive(node=[node] if node else None)
+                current_hive_client = (
+                    hive_client if hive_client is not None else Hive(node=[node] if node else None)
+                )
                 blockchain = Blockchain(current_hive_client)
                 # ``blockchain.stream`` is blocking; run in its own thread and push matches
                 for op in blockchain.stream(opNames=["custom_json"], raw_ops=False, start=block):
