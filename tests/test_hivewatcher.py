@@ -5,6 +5,11 @@ import pytest
 from hivewatcher import watch
 
 
+class DummyBlock:
+    def __init__(self, block_num=1000):
+        self.block_num = block_num
+
+
 class DummyHive:
     def __init__(self, node=None):
         # record the node for assertion
@@ -14,6 +19,9 @@ class DummyHive:
         # allow tests to verify that our stream method was used
         self.stream_called = False
 
+    def get_current_block(self):
+        return DummyBlock(1000)
+
     def stream(self, opNames=None, raw_ops=False, **kwargs):
         # record invocation so tests can assert we used blockchain.stream
         self.stream_called = True
@@ -21,6 +29,14 @@ class DummyHive:
         yield {"type": "custom_json", "id": "nope"}
         yield {"type": "custom_json", "id": "pp_first"}
         yield {"type": "custom_json", "id": "pplt_second"}
+
+
+@pytest.fixture(autouse=True)
+def _isolate_block_file(monkeypatch, tmp_path):
+    """Redirect the persistent block-number file to a temp directory so tests
+    never read/write the real ``data/latest_block_num.json``."""
+    monkeypatch.setattr(watch, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(watch, "LATEST_BLOCK_FILE", tmp_path / "latest_block_num.json")
 
 
 @pytest.mark.asyncio
@@ -62,6 +78,9 @@ class FailingHive(DummyHive):
     def __init__(self, node=None):
         super().__init__(node=node)
         self.call_count = 0
+
+    def get_current_block(self):
+        return DummyBlock(1000)
 
     def stream(self, opNames=None, raw_ops=False, **kwargs):
         self.stream_called = True
