@@ -39,6 +39,11 @@ async def test_async_watch_filters(monkeypatch, caplog):
     monkeypatch.setattr(watch, "Hive", DummyHive)
     monkeypatch.setattr(watch, "Blockchain", lambda client: client)
 
+    async def noop_send_test_podping(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(watch, "send_test_podping", noop_send_test_podping)
+
     # we pass a dummy client so ``node`` argument is skipped and we can also
     # assert the node value below
     client = DummyHive(node="https://example.com")
@@ -72,6 +77,11 @@ async def test_async_watch_recovers_after_stream_failure(monkeypatch, caplog):
 
     monkeypatch.setattr(watch, "Hive", FailingHive)
     monkeypatch.setattr(watch, "Blockchain", lambda client: client)
+
+    async def noop_send_test_podping(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(watch, "send_test_podping", noop_send_test_podping)
 
     client = FailingHive(node="https://example.com")
     await watch.async_watch("pp", hive_client=client, max_ops=1, retry_delay=0.0)  # type: ignore
