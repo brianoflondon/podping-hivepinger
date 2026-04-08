@@ -99,6 +99,7 @@ async def async_watch(
     all_pings: bool = True,
     call_url: str = CALL_URL,
     block: int | None = None,
+    retry_delay: float = 5.0,
 ) -> None:
     """Internal coroutine which performs the actual watching.
 
@@ -121,29 +122,41 @@ async def async_watch(
         Whether to send all podpings on to gossip and no_broadcast them to Hive.  This is primarily for testing to verify the watcher is correctly parsing and sending all valid podpings
     call_url:
         URL to send test podping requests to for 3speak broadcasts.
+    retry_delay:
+        Number of seconds to wait before attempting to reconnect after a stream failure.
     """
-
-    # create or reuse client
-    if hive_client is None:
-        hive_client = Hive(node=[node] if node else None)
 
     queue: asyncio.Queue[Dict[str, Any]] = asyncio.Queue()
     loop = asyncio.get_running_loop()
+    stop_event = threading.Event()
 
     def _producer() -> None:
         logging.info("producer thread starting")
-        try:
-            # ``blockchain.stream`` is blocking; run in its own thread and push matches
-            blockchain = Blockchain(hive_client)
-            for op in blockchain.stream(opNames=["custom_json"], raw_ops=False, start=block):
-                op_id = op.get("id", "")
-                if threespeak_podping_send and op_id == "3speak-publish":
-                    loop.call_soon_threadsafe(queue.put_nowait, op)
-                if all_pings and op_id.startswith(podping_prefix):
-                    # schedule adding to queue on the main loop
-                    loop.call_soon_threadsafe(queue.put_nowait, op)
-        except Exception as exc:  # pragma: no cover - defensive
-            logging.exception("streaming thread raised an exception: %s", exc)
+        while not stop_event.is_set():
+            try:
+                current_hive_client = hive_client if hive_client is not None else Hive(node=[node] if node else None)
+                blockchain = Blockchain(current_hive_client)
+                # ``blockchain.stream`` is blocking; run in its own thread and push matches
+                for op in blockchain.stream(opNames=["custom_json"], raw_ops=False, start=block):
+                    op_id = op.get("id", "")
+                    if threespeak_podping_send and op_id == "3speak-publish":
+                        loop.call_soon_threadsafe(queue.put_nowait, op)
+                    if all_pings and op_id.startswith(podping_prefix):
+                        loop.call_soon_threadsafe(queue.put_nowait, op)
+                logging.info("blockchain stream ended normally")
+                if stop_event.is_set():
+                    break
+                if retry_delay <= 0:
+                    break
+                logging.info("reconnecting in %s seconds", retry_delay)
+            except Exception as exc:  # pragma: no cover - defensive
+                logging.exception(
+                    "streaming thread raised an exception; reconnecting in %s seconds: %s",
+                    retry_delay,
+                    exc,
+                )
+            if stop_event.wait(retry_delay):
+                break
 
     thread = threading.Thread(target=_producer, daemon=True)
     thread.start()
@@ -194,6 +207,7 @@ async def async_watch(
             count += 1
             if max_ops is not None and count >= max_ops:
                 logging.info("received %d ops; exiting", count)
+                stop_event.set()
                 break
 
 

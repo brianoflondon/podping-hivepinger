@@ -51,3 +51,31 @@ async def test_async_watch_filters(monkeypatch, caplog):
     assert not any("nope" in msg for msg in records)
     # ensure our dummy blockchain stream method was actually used
     assert client.stream_called
+
+
+class FailingHive(DummyHive):
+    def __init__(self, node=None):
+        super().__init__(node=node)
+        self.call_count = 0
+
+    def stream(self, opNames=None, raw_ops=False, **kwargs):
+        self.stream_called = True
+        self.call_count += 1
+        if self.call_count == 1:
+            raise RuntimeError("network failure")
+        yield {"type": "custom_json", "id": "pp_recovered"}
+
+
+@pytest.mark.asyncio
+async def test_async_watch_recovers_after_stream_failure(monkeypatch, caplog):
+    caplog.set_level(logging.INFO)
+
+    monkeypatch.setattr(watch, "Hive", FailingHive)
+    monkeypatch.setattr(watch, "Blockchain", lambda client: client)
+
+    client = FailingHive(node="https://example.com")
+    await watch.async_watch("pp", hive_client=client, max_ops=1, retry_delay=0.0)  # type: ignore
+
+    records = [r.getMessage() for r in caplog.records]
+    assert any("pp_recovered" in msg for msg in records)
+    assert client.call_count == 2
