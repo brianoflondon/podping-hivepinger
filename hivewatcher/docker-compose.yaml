@@ -12,6 +12,16 @@ services:
     volumes:
       - ./data:/hivepinger/data
 
+  all-pings-watcher:
+    image: brianoflondon/podping-hivepinger:latest
+    container_name: all-pings-watcher
+    command: ["python", "src/hivewatcher/watch.py", "--all-pings", "--no-threespeak", "--podping-prefix", "pp", "--call-url", "http://hivepinger:8000/"]
+    restart: unless-stopped
+    networks:
+      - hivepinger-network
+    volumes:
+      - ./data/all-pings:/hivepinger/data
+
 networks:
   hivepinger-network:
     external: true

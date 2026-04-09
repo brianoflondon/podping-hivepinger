@@ -130,7 +130,8 @@ async def send_podping_to_hive(
         )
         for item in batch_items:
             await queue.mark_sent(item["url"], item["medium"], item["reason"], str(trx_id))
-            log_func(f"{trx_id} {item['url']} marked sent")
+            no_broadcast_str = "🔇 " if podping_obj.no_broadcast else "✅ "
+            log_func(f"{no_broadcast_str}{trx_id} {item['url']} marked sent")
         # successfully sent — remove from pending
         ids_to_remove = [item["id"] for item in batch_items]
         await queue.remove_pending(ids_to_remove)
